@@ -9,28 +9,18 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/Lucasmenezes08/sprint-builder-api.git/internal/app"
 )
 
 func main() {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-
-	server := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout: 60 * time.Second,
-	}
+	
+	application := app.New()
 
 	errCh := make(chan error, 1)
 	go func(){
-		slog.Info("Server started", "addr", server.Addr)
-		errCh <- server.ListenAndServe()
+		slog.Info("application started", application.Addr(), application.Addr)
+		errCh <- application.ListenAndServe()
 	}()
 
 	sigCh := make(chan os.Signal, 1)
@@ -45,17 +35,18 @@ func main() {
 	
 	case err := <- errCh:
 		if !errors.Is(err, http.ErrServerClosed){
-			slog.Error("Server forced stop with error", "error", err)
+			slog.Error("application stopped unexpectedly", "error", err)
 		}
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25 * time.Second)
 
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := application.Shutdown(ctx); err != nil {
 		slog.Error("shutown time exceeted", "error", err)
-		_ = server.Close()
+		_ = application.Close()
 	}
 	slog.Info("Shutdown done")
 }
