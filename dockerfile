@@ -12,6 +12,8 @@ FROM alpine:3.22
 
 WORKDIR /app
 
+EXPOSE 8080
+
 COPY --from=builder /app/api ./api
 
 CMD ["./api"]
