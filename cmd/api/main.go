@@ -11,8 +11,9 @@ import (
 	"strconv"
 	"syscall"
 	"time"
-	"github.com/Lucasmenezes08/sprint-builder-api.git/internal/app"
-	"github.com/Lucasmenezes08/sprint-builder-api.git/internal/database"
+
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/app"
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/database"
 	"github.com/joho/godotenv"
 )
 

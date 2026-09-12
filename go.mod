@@ -1,4 +1,4 @@
-module github.com/Lucasmenezes08/sprint-builder-api.git
+module github.com/Lucasmenezes08/kotoro-api.git
 
 go 1.26.5
 
