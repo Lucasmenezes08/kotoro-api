@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"syscall"
 	"time"
-
 	"github.com/Lucasmenezes08/sprint-builder-api.git/internal/app"
 	"github.com/Lucasmenezes08/sprint-builder-api.git/internal/database"
 	"github.com/joho/godotenv"
@@ -28,22 +27,34 @@ func run() error {
 
 	_ = godotenv.Load()
 
+	/* 
+		-- Study Docs
+		LoadFromDatabase é uma maneira de padronizar o carregamento das variaveis de ambiente do banco de dados e 
+		padronizar para o formato de config.
+	*/
 	dbVariables, err := loadFromDatabase()
 	if err != nil {
 		return err
 	}
+
+	/* 
+		-- Study Docs
+		Inicializa o contexto global da aplicacao, com limite de tempo de 10 segundos de tolerancia para ativar o cancel.
+	*/
 
 	startupCtx, startupCancel := context.WithTimeout(
 		context.Background(),
 		10*time.Second,
 	)
 
+	newDb, err := database.ConnectDatabase(startupCtx, dbVariables)
+	
 	startupCancel()
 
-	newDb, err := database.ConnectDatabase(startupCtx, dbVariables)
 	if err != nil {
 		return err
 	}
+	
 
 	defer func() {
 		if err := newDb.Close(); err != nil {
@@ -54,6 +65,16 @@ func run() error {
 	slog.Info("database connection established")
 
 	application := app.New()
+	
+
+
+	/* 
+		-- Study Docs
+		
+		Gracefull Shutodwn, um canal de erro é criado e um canal para o sinal tambem
+		O intuito é controlar as respostas da aplicacao que estao rodando em formato concorrente.
+	*/
+
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -97,7 +118,6 @@ func run() error {
 			),
 			closeErr,
 		)
-
 	}
 
 	serverErr := <-errCh
