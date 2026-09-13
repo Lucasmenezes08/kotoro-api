@@ -4,23 +4,23 @@ import (
 	"context"
 	"embed"
 	"fmt"
-	"time"
-
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 	"github.com/pressly/goose/v3"
+	"time"
 )
 
 type Config struct {
-	URL string 
-	MaxOpenConns int
-	MaxIdleConns int
+	URL             string
+	MaxOpenConns    int
+	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
-	ConnMaxIdleTime time.Duration	
+	ConnMaxIdleTime time.Duration
 }
 
-func ConnectDatabase(ctx context.Context, cfg Config)(*sqlx.DB, error){
-	db , err := sqlx.Open("pgx", cfg.URL)
-	if err != nil{
+func ConnectDatabase(ctx context.Context, cfg Config) (*sqlx.DB, error) {
+	db, err := sqlx.Connect("pgx", cfg.URL)
+	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
@@ -29,7 +29,7 @@ func ConnectDatabase(ctx context.Context, cfg Config)(*sqlx.DB, error){
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
-	pingCtx, cancel := context.WithTimeout(ctx, 5 * time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(pingCtx); err != nil {
@@ -42,12 +42,11 @@ func ConnectDatabase(ctx context.Context, cfg Config)(*sqlx.DB, error){
 func RunMigrations(db *sqlx.DB, fs embed.FS, dir string) error {
 	goose.SetBaseFS(fs)
 
-
-	if err := goose.SetDialect("postgres"); err != nil{
+	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("set dialect: %w", err)
 	}
 
-	if err := goose.Up(db.DB , dir); err != nil {
+	if err := goose.Up(db.DB, dir); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
 
