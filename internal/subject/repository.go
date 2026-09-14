@@ -8,20 +8,25 @@ import (
 )
 
 type SubjectRepository struct{
-	DB *sqlx.DB
+	db *sqlx.DB
 }
 
-func (s *SubjectRepository)NewSubjectRepository(db *sqlx.DB) *SubjectRepository{
+type SubjectCreateInput struct {
+	Name string `json:"name" db:"name"`
+	Color Color `json:"color" db:"color"`
+}
+
+func NewSubjectRepository(db *sqlx.DB) *SubjectRepository{
 	return &SubjectRepository{
-		DB : db,
+		db : db,
 	}
 }
 
-func (s *SubjectRepository)Create(ctx context.Context, subject Subject)error{
-	_, err := s.DB.NamedExecContext(ctx, "INSERT INTO subjects (name ,color) VALUES (:name, :color)", &subject)
+func (s *SubjectRepository)Create(ctx context.Context, subject SubjectCreateInput)error{
+	_, err := s.db.NamedExecContext(ctx, "INSERT INTO subjects (name ,color) VALUES (:name, :color)", &subject)
 	
 	if err != nil {
-		return fmt.Errorf("Error to create subject, error, %v", err)
+		return fmt.Errorf("Error to create subject, error, %w", err)
 	}
 
 	return nil
