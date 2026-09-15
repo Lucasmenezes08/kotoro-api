@@ -65,7 +65,7 @@ func run() error {
 
 	slog.Info("database connection established")
 
-	application := app.New()
+	application := app.New(newDb)
 	
 
 

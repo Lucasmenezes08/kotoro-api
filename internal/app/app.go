@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 
@@ -12,9 +14,10 @@ type Application struct {
 }
 
 
-func New() *Application {
+func New(db *sqlx.DB) *Application {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
+	RegisterSubjectsRoutes(mux, db)
 
 	return &Application{
 		server : &http.Server{
