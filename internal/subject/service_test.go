@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-
 type fakeSubjectRepository struct {
-	createFn func(ctx context.Context, subject SubjectCreateInput)error
+	createFn func(ctx context.Context, subject SubjectCreateInput) error
+	getAllFn func(ctx context.Context)([]Subject, error)
 }
 
-
-func (r *fakeSubjectRepository)Create(ctx context.Context, subject SubjectCreateInput)error{
+func (r *fakeSubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
 	if r.createFn == nil {
 		panic("unexpected call to create")
 	}
@@ -20,21 +19,28 @@ func (r *fakeSubjectRepository)Create(ctx context.Context, subject SubjectCreate
 	return r.createFn(ctx, subject)
 }
 
+func (r *fakeSubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
+	if r.getAllFn == nil {
+		panic("unexpected call to get")
+	}
+	return r.getAllFn(ctx)
+}
+
 var _ SubjectContract = (*fakeSubjectRepository)(nil)
 
-func TestServiceCreate(t *testing.T){
-	t.Run("returns error when color is invalid", func(t *testing.T){
+func TestServiceCreate(t *testing.T) {
+	t.Run("returns error when color is invalid", func(t *testing.T) {
 		ctx := context.Background()
 		newFakeSubjectRepository := &fakeSubjectRepository{}
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
-			Name: "Math",
+			Name:  "Math",
 			Color: "simsalabim",
 		}
-		
+
 		err := service.Create(ctx, newSubject)
-		if !errors.Is(err, ErrSubjectInvalidColor){
+		if !errors.Is(err, ErrSubjectInvalidColor) {
 			t.Fatalf("invalid subject color")
 		}
 	})
@@ -45,7 +51,7 @@ func TestServiceCreate(t *testing.T){
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
-			Name: "math",
+			Name:  "math",
 			Color: " ",
 		}
 
@@ -64,7 +70,7 @@ func TestServiceCreate(t *testing.T){
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
-			Name: " ",
+			Name:  " ",
 			Color: "black",
 		}
 
@@ -76,4 +82,48 @@ func TestServiceCreate(t *testing.T){
 			)
 		}
 	})
+}
+
+func TestServiceGet(t *testing.T) {
+	ctx := context.Background()
+
+	expected := []Subject{
+		{
+			Name:  "Math",
+			Color: ColorBlack,
+		},
+	}
+
+	repository := &fakeSubjectRepository{
+		getAllFn: func(ctx context.Context) ([]Subject, error) {
+			return expected,nil
+		},
+	}
+	service := NewSubjectService(repository)
+
+	sub, err := service.GetAll(ctx)
+
+	if err != nil {
+		t.Fatalf("Must return getAll error")
+	}
+
+	if len(sub) != 1 {
+		t.Fatalf("expected %d, got %d subjects", len(expected), len(sub))
+	}
+
+	if sub[0].Name != expected[0].Name {
+		t.Errorf(
+			"expected name %q, got %q",
+			expected[0].Name,
+			sub[0].Name,
+		)
+	}
+
+	if sub[0].Color != expected[0].Color {
+		t.Errorf(
+			"expected color %q, got %q",
+			expected[0].Color,
+			sub[0].Color,
+		)
+	}
 }

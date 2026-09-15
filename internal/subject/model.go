@@ -1,10 +1,9 @@
 package subject
 
 import (
-	"time"
 	"github.com/google/uuid"
+	"time"
 )
-
 
 type Color string
 
@@ -21,12 +20,11 @@ const (
 	ColorYellow Color = "yellow"
 )
 
-
 type Subject struct {
-	Id uuid.UUID `db:"id"`
-	Name string `db:"name"`
-	Color Color `db:"color"` 
-	Created_at time.Time `db:"created_at"`
-	Updated_at time.Time `db:"updated_at"`
+	Id         uuid.UUID  `db:"id"`
+	Name       string     `db:"name"`
+	Color      Color      `db:"color"`
+	Created_at time.Time  `db:"created_at"`
+	Updated_at time.Time  `db:"updated_at"`
 	Deleted_at *time.Time `db:"deleted_at"`
-} 
+}
