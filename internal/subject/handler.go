@@ -104,6 +104,7 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
 
 	if err := decode.Decode(&req); err != nil{
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid request body"})
+		return 
 	}
 
 	input := SubjectUpdateInput{
@@ -115,24 +116,25 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
 
 	id, err := uuid.Parse(pathId)
 	if err != nil {
-		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"} )
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
+		return 
 	}
 
 	update := c.service.Update(r.Context(), id, input)
 
 	switch {
 	case errors.Is(update, ErrSubjectUpdateEmpty):
-		utils.WriteJson(w, http.StatusNoContent, update)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: update.Error()})
 	case errors.Is(update, ErrSubjectRequiredName):
-		utils.WriteJson(w, http.StatusBadRequest, update)
-	case errors.Is(update, ErrSubjectRequiredName):
-		utils.WriteJson(w, http.StatusBadRequest, update)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: update.Error()})
 	case errors.Is(update, ErrSubjectRequiredColor):
-		utils.WriteJson(w, http.StatusBadRequest, update)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: update.Error()})
 	case errors.Is(update, ErrSubjectInvalidColor):
-		utils.WriteJson(w, http.StatusBadRequest, update)
-	case err != nil:
-		slog.Error("failed to update subject", "error", err)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: update.Error()})
+	case errors.Is(update, ErrSubjectNotFound):
+		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: update.Error()})
+	case update != nil:
+		slog.Error("failed to update subject", "error", update)
 
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{
 			Error: "internal server error",
