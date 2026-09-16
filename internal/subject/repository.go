@@ -2,6 +2,8 @@ package subject
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -49,18 +51,26 @@ func (s *SubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 }
 
 func (s *SubjectRepository)GetByName(ctx context.Context, name string) (*Subject, error){
-	query := "SELECT id,name,color,created_at,updated_at,deleted_at FROM subjects WHERE deleted_at IS NULL AND name = ?"
+	var subject Subject
+
+	query := "SELECT id,name,color,created_at,updated_at,deleted_at FROM subjects WHERE deleted_at IS NULL AND name = $1 LIMIT 1"
 	
-	if err := s.db.SelectContext(ctx, name, query); err != nil{
-		return nil,fmt.Errorf("Error to get subject by name, error, %w", err)
+	err := s.db.GetContext(ctx, &subject, query, name)
+
+	if errors.Is(err, sql.ErrNoRows){
+		return nil, ErrSubjectNotFound
 	}
 
-	return &Subject{},nil
+	if err != nil{
+		return nil,fmt.Errorf("Error to get subject by name, error, %w", err)
+	}
+		
+	return &subject,nil
 }
 
 
 func (s *SubjectRepository)Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error{
-	query := "UPDATE subjects SET name = $1, color = $2, updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
+	query := "UPDATE subjects SET name = COALESCE($1::varchar, name), color = COALESCE($2::colors, color), updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
 
 	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id)
 
