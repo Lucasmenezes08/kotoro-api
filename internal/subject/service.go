@@ -19,6 +19,7 @@ type SubjectContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
 	GetAll(ctx context.Context) ([]Subject, error)
 	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error
+	DeleteById(ctx context.Context, id uuid.UUID)error
 }
 
 type SubjectService struct {
@@ -83,6 +84,17 @@ func (s *SubjectService)Update(ctx context.Context, id uuid.UUID, input SubjectU
 	}
 	return nil
 }
+
+
+func (s *SubjectService)DeleteById(ctx context.Context, id uuid.UUID)error{
+	if err := s.repository.DeleteById(ctx, id); err != nil {
+		return err
+	} 
+
+	return nil
+}
+
+
 
 func ValidColor(color Color) error {
 	switch color {

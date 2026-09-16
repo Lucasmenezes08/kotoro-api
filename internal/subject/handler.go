@@ -15,6 +15,7 @@ type SubjectServiceContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
 	GetAll(ctx context.Context)([]Subject, error)
 	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error
+	DeleteById(ctx context.Context, id uuid.UUID)error
 }
 
 type SubjectController struct {
@@ -142,4 +143,25 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+
+func (c * SubjectController)DeleteById(w http.ResponseWriter, r *http.Request){
+
+	pathId := r.PathValue("id")
+
+	param, errParse := uuid.Parse(pathId)
+	if errParse != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
+		return 
+	}
+
+	err := c.service.DeleteById(r.Context(),param)
+
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

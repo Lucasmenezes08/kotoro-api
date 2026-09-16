@@ -12,6 +12,7 @@ type fakeSubjectRepository struct {
 	createFn func(ctx context.Context, subject SubjectCreateInput) error
 	getAllFn func(ctx context.Context)([]Subject, error)
 	updateFn func(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
+	deleteByIdFn func(ctx context.Context, id uuid.UUID)error
 }
 
 func (r *fakeSubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
@@ -35,6 +36,14 @@ func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input 
 	}
 	return r.updateFn(ctx, id, input)
 }
+
+func (r *fakeSubjectRepository) DeleteById(ctx context.Context, id uuid.UUID)error {
+	if r.deleteByIdFn == nil {
+		panic("unexpected call to deleteById")
+	}
+	return r.deleteByIdFn(ctx, id)
+}
+
 
 var _ SubjectContract = (*fakeSubjectRepository)(nil)
 

@@ -99,3 +99,24 @@ func (s *SubjectRepository) Create(ctx context.Context, subject SubjectCreateInp
 
 	return nil
 }
+
+func (s *SubjectRepository) DeleteById(ctx context.Context, id uuid.UUID)error{
+	
+	query := "UPDATE subjects SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL"
+	result , err := s.db.ExecContext(ctx, query, id)
+	
+	if err != nil {
+		return fmt.Errorf("Error to delete by id, error, %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get deleted rows count: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrSubjectNotFound
+	}
+
+	return nil
+}
