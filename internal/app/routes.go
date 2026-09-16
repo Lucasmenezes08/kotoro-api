@@ -22,4 +22,5 @@ func RegisterSubjectsRoutes(mux * http.ServeMux, db *sqlx.DB){
 
 	mux.HandleFunc("GET /subjects", controller.GetAll)
 	mux.HandleFunc("POST /subjects", controller.Create)
+	mux.HandleFunc("PATCH /subjects/{id}", controller.Update)
 }

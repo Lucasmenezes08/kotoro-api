@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 type fakeSubjectRepository struct {
 	createFn func(ctx context.Context, subject SubjectCreateInput) error
 	getAllFn func(ctx context.Context)([]Subject, error)
+	updateFn func(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
 }
 
 func (r *fakeSubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
@@ -24,6 +27,13 @@ func (r *fakeSubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 		panic("unexpected call to get")
 	}
 	return r.getAllFn(ctx)
+}
+
+func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error {
+	if r.getAllFn == nil {
+		panic("unexpected call to update")
+	}
+	return r.updateFn(ctx, id, input)
 }
 
 var _ SubjectContract = (*fakeSubjectRepository)(nil)

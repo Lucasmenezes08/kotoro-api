@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -14,6 +15,11 @@ type SubjectRepository struct {
 type SubjectCreateInput struct {
 	Name  string `json:"name" db:"name"`
 	Color Color  `json:"color" db:"color"`
+}
+
+type SubjectUpdateInput struct {
+	Name *string `json:"name" db:"name"`
+	Color *Color `json:"color" db:"color"`
 }
 
 func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
@@ -50,6 +56,28 @@ func (s *SubjectRepository)GetByName(ctx context.Context, name string) (*Subject
 	}
 
 	return &Subject{},nil
+}
+
+
+func (s *SubjectRepository)Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error{
+	query := "UPDATE subjects SET name = $1, color = $2, updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
+
+	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id)
+
+	if err != nil{
+		return fmt.Errorf("Update subjects failed: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get updated rows count: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrSubjectNotFound
+	}
+
+	return nil
 }
 
 func (s *SubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {

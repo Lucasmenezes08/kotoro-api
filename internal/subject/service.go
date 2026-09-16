@@ -5,15 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var ErrSubjectInvalidColor error = errors.New("Error to verify valid color")
 var ErrSubjectRequiredColor error = errors.New("Subject color is required")
 var ErrSubjectRequiredName error = errors.New("Subject name is required")
+var ErrSubjectNotFound error = errors.New("Subject not found")
+var ErrSubjectUpdateEmpty error = errors.New("Update fields must have one value at least")
 
 type SubjectContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
 	GetAll(ctx context.Context) ([]Subject, error)
+	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error
 }
 
 type SubjectService struct {
@@ -49,6 +54,32 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 
 	if err := s.repository.Create(ctx, subject); err != nil {
 		return fmt.Errorf("error to create subject, error, %w\n", err)
+	}
+	return nil
+}
+
+func (s *SubjectService)Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error{
+	if input.Name == nil && input.Color == nil {
+		return ErrSubjectUpdateEmpty
+	}
+
+	if input.Name != nil {
+		if strings.TrimSpace(*input.Name) == ""{
+			return ErrSubjectRequiredName
+		}
+	}
+
+	if input.Color != nil {
+		if strings.TrimSpace(string(*input.Color)) == ""{
+			return ErrSubjectRequiredColor
+		}
+		if ValidColor(*input.Color) != nil {
+			return ErrSubjectInvalidColor
+		}
+	}
+
+	if err := s.repository.Update(ctx, id, input); err != nil {
+		return fmt.Errorf("%w",err)
 	}
 	return nil
 }
