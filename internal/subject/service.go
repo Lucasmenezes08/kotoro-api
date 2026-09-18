@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -14,19 +15,36 @@ var ErrSubjectRequiredColor error = errors.New("Subject color is required")
 var ErrSubjectRequiredName error = errors.New("Subject name is required")
 var ErrSubjectNotFound error = errors.New("Subject not found")
 var ErrSubjectUpdateEmpty error = errors.New("Update fields must have one value at least")
+var ErrSubjectCreateBatchEmpty error = errors.New("Subjects fields must have one value at least")
+
+const maxWorkerPools int = 4
+
+type SubjectBatchJob struct{
+	Index int
+	Subject SubjectCreateInput
+}
+
+type SubjectBatchResult struct{
+	Index   int
+	Name    string
+	Created bool
+	Err     error
+}
+
 
 type SubjectContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
 	GetAll(ctx context.Context) ([]Subject, error)
 	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error
 	DeleteById(ctx context.Context, id uuid.UUID)error
+	CreateBatch(ctx context.Context ,subjects []SubjectCreateInput)([]SubjectBatchResult,error)
 }
 
 type SubjectService struct {
-	repository SubjectContract
+	repository SubjectRepositoryContract
 }
 
-func NewSubjectService(repository SubjectContract) *SubjectService {
+func NewSubjectService(repository SubjectRepositoryContract) *SubjectService {
 	return &SubjectService{
 		repository: repository,
 	}
@@ -94,7 +112,98 @@ func (s *SubjectService)DeleteById(ctx context.Context, id uuid.UUID)error{
 	return nil
 }
 
+func (s *SubjectService)CreateBatch(ctx context.Context, subjects []SubjectCreateInput)([]SubjectBatchResult,error){
+	if len(subjects) == 0{
+		return []SubjectBatchResult{}, nil
+	}
 
+	var wg sync.WaitGroup
+	jobs := make(chan SubjectBatchJob)
+	results := make(chan SubjectBatchResult)
+	
+
+	workerCount := maxWorkerPools
+
+	if len(subjects) < workerCount{
+		workerCount = len(subjects)
+	}
+
+	wg.Add(workerCount)
+
+	for i := 0 ; i < workerCount; i ++{
+		go s.workerCreateSubjects(ctx, jobs, results, &wg)
+	}
+
+	go func(){
+		defer close(jobs)
+
+		for index, input := range subjects {
+			job := SubjectBatchJob{
+				Index:   index,
+				Subject: input,
+			}
+
+			select {
+			case jobs <- job:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	batchResults := make(
+		[]SubjectBatchResult,
+		len(subjects),
+	)
+
+	for result := range results {
+		batchResults[result.Index] = result
+	}
+
+	if err := ctx.Err(); err != nil {
+		return batchResults, err
+	}
+
+	return batchResults, nil
+}
+
+
+func(s *SubjectService)workerCreateSubjects(ctx context.Context, subjectjobs  <-chan SubjectBatchJob, subjectJobResult chan<- SubjectBatchResult, wg *sync.WaitGroup){
+	defer wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case job, ok := <-subjectjobs:
+			if !ok {
+				return
+			}
+
+			err := s.Create(ctx, job.Subject)
+
+			result := SubjectBatchResult{
+				Index:   job.Index,
+				Name:    job.Subject.Name,
+				Created: err == nil,
+				Err:     err,
+			}
+
+			select {
+			case subjectJobResult <- result:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
 
 func ValidColor(color Color) error {
 	switch color {

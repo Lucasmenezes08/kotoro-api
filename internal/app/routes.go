@@ -24,4 +24,5 @@ func RegisterSubjectsRoutes(mux * http.ServeMux, db *sqlx.DB){
 	mux.HandleFunc("POST /subjects", controller.Create)
 	mux.HandleFunc("PATCH /subjects/{id}", controller.Update)
 	mux.HandleFunc("DELETE /subjects/{id}", controller.DeleteById)
+	mux.HandleFunc("POST /subjects/import", controller.CreateBatch)
 }

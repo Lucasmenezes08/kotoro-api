@@ -10,6 +10,15 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+
+type SubjectRepositoryContract interface {
+	Create(ctx context.Context, subject SubjectCreateInput) error
+	GetAll(ctx context.Context) ([]Subject, error)
+	Update(ctx context.Context,id uuid.UUID, input SubjectUpdateInput) error
+	DeleteById(ctx context.Context, id uuid.UUID) error
+}
+
+
 type SubjectRepository struct {
 	db *sqlx.DB
 }
