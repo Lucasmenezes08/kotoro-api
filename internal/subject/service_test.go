@@ -9,11 +9,12 @@ import (
 )
 
 type fakeSubjectRepository struct {
-	createFn func(ctx context.Context, subject SubjectCreateInput) error
-	getAllFn func(ctx context.Context)([]Subject, error)
-	updateFn func(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
-	deleteByIdFn func(ctx context.Context, id uuid.UUID)error 
-	createBatchFn func(ctx context.Context, subjects []SubjectCreateInput)([]SubjectBatchResult,error)
+	createFn      func(ctx context.Context, subject SubjectCreateInput) error
+	getAllFn      func(ctx context.Context) ([]Subject, error)
+	getByNameFn   func(ctx context.Context, name string) (*Subject, error)
+	updateFn      func(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
+	deleteByIdFn  func(ctx context.Context, id uuid.UUID) error
+	createBatchFn func(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
 }
 
 func (r *fakeSubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
@@ -31,27 +32,33 @@ func (r *fakeSubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 	return r.getAllFn(ctx)
 }
 
-func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error {
+func (r *fakeSubjectRepository) GetByName(ctx context.Context, name string) (*Subject, error) {
+	if r.getAllFn == nil {
+		panic("unexpected call to get by name")
+	}
+	return r.getByNameFn(ctx, name)
+}
+
+func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
 	if r.getAllFn == nil {
 		panic("unexpected call to update")
 	}
 	return r.updateFn(ctx, id, input)
 }
 
-func (r *fakeSubjectRepository) DeleteById(ctx context.Context, id uuid.UUID)error {
+func (r *fakeSubjectRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
 	if r.deleteByIdFn == nil {
 		panic("unexpected call to deleteById")
 	}
 	return r.deleteByIdFn(ctx, id)
 }
 
-func (r *fakeSubjectRepository) CreateBatch(ctx context.Context, subjects []SubjectCreateInput)([]SubjectBatchResult,error) {
+func (r *fakeSubjectRepository) CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error) {
 	if r.createBatchFn == nil {
 		panic("unexpected call to deleteById")
 	}
 	return r.createBatchFn(ctx, subjects)
 }
-
 
 var _ SubjectContract = (*fakeSubjectRepository)(nil)
 
@@ -123,7 +130,7 @@ func TestServiceGet(t *testing.T) {
 
 	repository := &fakeSubjectRepository{
 		getAllFn: func(ctx context.Context) ([]Subject, error) {
-			return expected,nil
+			return expected, nil
 		},
 	}
 	service := NewSubjectService(repository)

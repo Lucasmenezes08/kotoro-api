@@ -7,15 +7,14 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-
-func RegisterRoutes(mux *http.ServeMux){
+func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 }
 
-func RegisterSubjectsRoutes(mux * http.ServeMux, db *sqlx.DB){
+func RegisterSubjectsRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	repository := subject.NewSubjectRepository(db)
 	service := subject.NewSubjectService(repository)
 	controller := subject.NewSubjectController(service)

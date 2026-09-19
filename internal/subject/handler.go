@@ -13,10 +13,10 @@ import (
 
 type SubjectServiceContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
-	GetAll(ctx context.Context)([]Subject, error)
-	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput)error
-	DeleteById(ctx context.Context, id uuid.UUID)error
-	CreateBatch(ctx context.Context, subjects []SubjectCreateInput)([]SubjectBatchResult,error)
+	GetAll(ctx context.Context) ([]Subject, error)
+	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
+	DeleteById(ctx context.Context, id uuid.UUID) error
+	CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
 }
 
 type SubjectController struct {
@@ -34,7 +34,7 @@ type createSubjectRequest struct {
 	Color Color  `json:"color"`
 }
 
-type createSubjectBatchRequest struct{
+type createSubjectBatchRequest struct {
 	Subjects []createSubjectRequest `json:"subjects"`
 }
 
@@ -54,20 +54,18 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-
-func (c *SubjectController)GetAll(w http.ResponseWriter, r *http.Request){
-	sub , err := c.service.GetAll(r.Context())
-	if err != nil{
+func (c *SubjectController) GetAll(w http.ResponseWriter, r *http.Request) {
+	sub, err := c.service.GetAll(r.Context())
+	if err != nil {
 
 		slog.Error("Error to get all subjects", "Error", err)
 
-		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error" })
-		return 
+		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
+		return
 	}
 
 	utils.WriteJson(w, http.StatusOK, sub)
 }
-
 
 func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
 	var req createSubjectRequest
@@ -97,6 +95,8 @@ func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrSubjectInvalidColor):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "invalid Subject color"})
 
+	case errors.Is(err, ErrSubjectDuplicated):
+		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
 	case err != nil:
 		slog.Error("failed to create subject", "error", err)
 
@@ -108,20 +108,19 @@ func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
-func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
+func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
 	var req updateSubjectRequest
 
 	decode := json.NewDecoder(r.Body)
 	decode.DisallowUnknownFields()
 
-	if err := decode.Decode(&req); err != nil{
+	if err := decode.Decode(&req); err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid request body"})
-		return 
+		return
 	}
 
 	input := SubjectUpdateInput{
-		Name: req.Name,
+		Name:  req.Name,
 		Color: req.Color,
 	}
 
@@ -130,7 +129,7 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
 	id, err := uuid.Parse(pathId)
 	if err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
-		return 
+		return
 	}
 
 	update := c.service.Update(r.Context(), id, input)
@@ -157,18 +156,17 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request){
 	}
 }
 
-
-func (c * SubjectController)DeleteById(w http.ResponseWriter, r *http.Request){
+func (c *SubjectController) DeleteById(w http.ResponseWriter, r *http.Request) {
 
 	pathId := r.PathValue("id")
 
 	param, errParse := uuid.Parse(pathId)
 	if errParse != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
-		return 
+		return
 	}
 
-	err := c.service.DeleteById(r.Context(),param)
+	err := c.service.DeleteById(r.Context(), param)
 
 	if err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -177,7 +175,6 @@ func (c * SubjectController)DeleteById(w http.ResponseWriter, r *http.Request){
 
 	w.WriteHeader(http.StatusNoContent)
 }
-
 
 func (c *SubjectController) CreateBatch(
 	w http.ResponseWriter,

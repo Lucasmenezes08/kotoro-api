@@ -10,14 +10,13 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-
 type SubjectRepositoryContract interface {
 	Create(ctx context.Context, subject SubjectCreateInput) error
 	GetAll(ctx context.Context) ([]Subject, error)
-	Update(ctx context.Context,id uuid.UUID, input SubjectUpdateInput) error
+	GetByName(ctx context.Context, name string) (*Subject, error)
+	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
 	DeleteById(ctx context.Context, id uuid.UUID) error
 }
-
 
 type SubjectRepository struct {
 	db *sqlx.DB
@@ -29,8 +28,8 @@ type SubjectCreateInput struct {
 }
 
 type SubjectUpdateInput struct {
-	Name *string `json:"name" db:"name"`
-	Color *Color `json:"color" db:"color"`
+	Name  *string `json:"name" db:"name"`
+	Color *Color  `json:"color" db:"color"`
 }
 
 func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
@@ -59,31 +58,30 @@ func (s *SubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 	return subject, nil
 }
 
-func (s *SubjectRepository)GetByName(ctx context.Context, name string) (*Subject, error){
+func (s *SubjectRepository) GetByName(ctx context.Context, name string) (*Subject, error) {
 	var subject Subject
 
 	query := "SELECT id,name,color,created_at,updated_at,deleted_at FROM subjects WHERE deleted_at IS NULL AND name = $1 LIMIT 1"
-	
+
 	err := s.db.GetContext(ctx, &subject, query, name)
 
-	if errors.Is(err, sql.ErrNoRows){
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSubjectNotFound
 	}
 
-	if err != nil{
-		return nil,fmt.Errorf("Error to get subject by name, error, %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("Error to get subject by name, error, %w", err)
 	}
-		
-	return &subject,nil
+
+	return &subject, nil
 }
 
-
-func (s *SubjectRepository)Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error{
+func (s *SubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
 	query := "UPDATE subjects SET name = COALESCE($1::varchar, name), color = COALESCE($2::colors, color), updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
 
 	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id)
 
-	if err != nil{
+	if err != nil {
 		return fmt.Errorf("Update subjects failed: %w", err)
 	}
 
@@ -109,11 +107,11 @@ func (s *SubjectRepository) Create(ctx context.Context, subject SubjectCreateInp
 	return nil
 }
 
-func (s *SubjectRepository) DeleteById(ctx context.Context, id uuid.UUID)error{
-	
+func (s *SubjectRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
+
 	query := "UPDATE subjects SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL"
-	result , err := s.db.ExecContext(ctx, query, id)
-	
+	result, err := s.db.ExecContext(ctx, query, id)
+
 	if err != nil {
 		return fmt.Errorf("Error to delete by id, error, %w", err)
 	}
