@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -31,6 +32,12 @@ type SubjectUpdateInput struct {
 	Name  *string `json:"name" db:"name"`
 	Color *Color  `json:"color" db:"color"`
 }
+
+const (
+	uniqueViolationCode        = "23505"
+	activeNameUniqueIndex      = "subjects_active_name_unique"
+	legacyNameUniqueConstraint = "subjects_name_key"
+)
 
 func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
 	return &SubjectRepository{
@@ -82,6 +89,10 @@ func (s *SubjectRepository) Update(ctx context.Context, id uuid.UUID, input Subj
 	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id)
 
 	if err != nil {
+		if isSubjectNameUniqueViolation(err) {
+			return ErrSubjectDuplicated
+		}
+
 		return fmt.Errorf("Update subjects failed: %w", err)
 	}
 
@@ -101,10 +112,24 @@ func (s *SubjectRepository) Create(ctx context.Context, subject SubjectCreateInp
 	_, err := s.db.NamedExecContext(ctx, "INSERT INTO subjects (name ,color) VALUES (:name, :color)", &subject)
 
 	if err != nil {
+		if isSubjectNameUniqueViolation(err) {
+			return ErrSubjectDuplicated
+		}
+
 		return fmt.Errorf("Error to create subject, error, %w", err)
 	}
 
 	return nil
+}
+
+func isSubjectNameUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolationCode {
+		return false
+	}
+
+	return pgErr.ConstraintName == activeNameUniqueIndex ||
+		pgErr.ConstraintName == legacyNameUniqueConstraint
 }
 
 func (s *SubjectRepository) DeleteById(ctx context.Context, id uuid.UUID) error {

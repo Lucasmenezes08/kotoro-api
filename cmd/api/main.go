@@ -14,6 +14,7 @@ import (
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/app"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/database"
+	"github.com/Lucasmenezes08/kotoro-api.git/migrations"
 	"github.com/joho/godotenv"
 )
 
@@ -63,6 +64,12 @@ func run() error {
 	}()
 
 	slog.Info("database connection established")
+
+	if err := database.RunMigrations(newDb, migrations.Files, "."); err != nil {
+		return err
+	}
+
+	slog.Info("database migrations applied")
 
 	application := app.New(newDb)
 

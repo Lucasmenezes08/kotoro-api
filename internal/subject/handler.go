@@ -319,6 +319,10 @@ func (c *SubjectController) CreateBatch(
 			failed++
 			item["error"] = "invalid subject color"
 
+		case errors.Is(result.Err, ErrSubjectDuplicated):
+			failed++
+			item["error"] = "subject already exists"
+
 		default:
 			failed++
 			item["error"] = "internal server error"

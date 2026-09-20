@@ -67,7 +67,10 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 		return ErrSubjectRequiredColor
 	}
 
-	duplicate, _ := s.repository.GetByName(ctx, subject.Name)
+	duplicate, err := s.repository.GetByName(ctx, subject.Name)
+	if err != nil && !errors.Is(err, ErrSubjectNotFound) {
+		return fmt.Errorf("check subject name: %w", err)
+	}
 
 	if duplicate != nil {
 		return ErrSubjectDuplicated
@@ -84,7 +87,6 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 }
 
 func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
-		
 	if input.Name == nil && input.Color == nil {
 		return ErrSubjectUpdateEmpty
 	}
@@ -94,10 +96,14 @@ func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input Subject
 			return ErrSubjectRequiredName
 		}
 
-		duplicate, _ := s.repository.GetByName(ctx, *input.Name)
-		if duplicate != nil && duplicate.Id != id{
+		duplicate, err := s.repository.GetByName(ctx, *input.Name)
+		if err != nil && !errors.Is(err, ErrSubjectNotFound) {
+			return fmt.Errorf("check subject name: %w", err)
+		}
+
+		if duplicate != nil && duplicate.Id != id {
 			return ErrSubjectDuplicated
-	}
+		}
 	}
 
 	if input.Color != nil {
