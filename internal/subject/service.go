@@ -84,6 +84,7 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 }
 
 func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
+		
 	if input.Name == nil && input.Color == nil {
 		return ErrSubjectUpdateEmpty
 	}
@@ -92,6 +93,11 @@ func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input Subject
 		if strings.TrimSpace(*input.Name) == "" {
 			return ErrSubjectRequiredName
 		}
+
+		duplicate, _ := s.repository.GetByName(ctx, *input.Name)
+		if duplicate != nil && duplicate.Id != id{
+			return ErrSubjectDuplicated
+	}
 	}
 
 	if input.Color != nil {

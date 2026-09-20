@@ -145,6 +145,8 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: update.Error()})
 	case errors.Is(update, ErrSubjectNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: update.Error()})
+	case errors.Is(update, ErrSubjectDuplicated):
+		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: update.Error()})
 	case update != nil:
 		slog.Error("failed to update subject", "error", update)
 
@@ -169,7 +171,7 @@ func (c *SubjectController) DeleteById(w http.ResponseWriter, r *http.Request) {
 	err := c.service.DeleteById(r.Context(), param)
 
 	if err != nil {
-		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
 		return
 	}
 

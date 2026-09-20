@@ -33,14 +33,14 @@ func (r *fakeSubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 }
 
 func (r *fakeSubjectRepository) GetByName(ctx context.Context, name string) (*Subject, error) {
-	if r.getAllFn == nil {
+	if r.getByNameFn == nil {
 		panic("unexpected call to get by name")
 	}
 	return r.getByNameFn(ctx, name)
 }
 
 func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
-	if r.getAllFn == nil {
+	if r.updateFn == nil {
 		panic("unexpected call to update")
 	}
 	return r.updateFn(ctx, id, input)
@@ -65,7 +65,11 @@ var _ SubjectContract = (*fakeSubjectRepository)(nil)
 func TestServiceCreate(t *testing.T) {
 	t.Run("returns error when color is invalid", func(t *testing.T) {
 		ctx := context.Background()
-		newFakeSubjectRepository := &fakeSubjectRepository{}
+		newFakeSubjectRepository := &fakeSubjectRepository{
+			getByNameFn: func(context.Context, string) (*Subject, error) {
+				return nil, ErrSubjectNotFound
+			},
+		}
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
@@ -81,7 +85,11 @@ func TestServiceCreate(t *testing.T) {
 
 	t.Run("returns error when color is empty", func(t *testing.T) {
 		ctx := context.Background()
-		newFakeSubjectRepository := &fakeSubjectRepository{}
+		newFakeSubjectRepository := &fakeSubjectRepository{
+			getByNameFn: func(context.Context, string) (*Subject, error) {
+				return nil, ErrSubjectNotFound
+			},
+		}
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
@@ -100,7 +108,11 @@ func TestServiceCreate(t *testing.T) {
 
 	t.Run("returns error when name is empty", func(t *testing.T) {
 		ctx := context.Background()
-		newFakeSubjectRepository := &fakeSubjectRepository{}
+		newFakeSubjectRepository := &fakeSubjectRepository{
+			getByNameFn: func(context.Context, string) (*Subject, error) {
+				return nil, ErrSubjectNotFound
+			},
+		}
 		service := NewSubjectService(newFakeSubjectRepository)
 
 		newSubject := SubjectCreateInput{
