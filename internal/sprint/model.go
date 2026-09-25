@@ -21,7 +21,7 @@ var (
 
 type Sprint struct {
 	ID          uuid.UUID    `db:"id"`
-	Name        string       `db:"name"`
+	Name        *string       `db:"name"`
 	SprintDate  time.Time    `db:"sprint_date"`
 	Status      SprintStatus `db:"status"`
 	StartedAt   *time.Time   `db:"started_at"`
