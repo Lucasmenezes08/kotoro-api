@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
 	"github.com/jmoiron/sqlx"
 )
@@ -24,4 +25,12 @@ func RegisterSubjectsRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	mux.HandleFunc("PATCH /subjects/{id}", controller.Update)
 	mux.HandleFunc("DELETE /subjects/{id}", controller.DeleteById)
 	mux.HandleFunc("POST /subjects/import", controller.CreateBatch)
+}
+
+func RegisterSprintRoutes(mux *http.ServeMux, db *sqlx.DB){
+	repository := sprint.NewSprintRepository(db)
+	service := sprint.NewSprintService(repository)
+	controller := sprint.NewSprintHandler(service)
+
+	mux.HandleFunc("POST /sprints", controller.Create)
 }

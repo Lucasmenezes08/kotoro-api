@@ -16,6 +16,7 @@ func New(db *sqlx.DB) *Application {
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
 	RegisterSubjectsRoutes(mux, db)
+	RegisterSprintRoutes(mux, db)
 
 	return &Application{
 		server: &http.Server{

@@ -7,8 +7,6 @@ import (
 )
 
 var (
-	ErrIncompatibleStatus error = errors.New("Incompatible status for create sprint, must be creating")
-	ErrSprintRequiredStatus error = errors.New("Require sprint status")
 	ErrSprintNameEmpty error = errors.New("Sprint name is empty")
 	ErrSprintNotFound error = errors.New("Sprint not found")
 	ErrSprintAlreadyExists error = errors.New("Only one sprint per day is allowed")
