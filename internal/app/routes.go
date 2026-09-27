@@ -32,6 +32,9 @@ func RegisterSprintRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	service := sprint.NewSprintService(repository)
 	controller := sprint.NewSprintHandler(service)
 
+	mux.HandleFunc("GET /sprints", controller.GetAll)
+	mux.HandleFunc("GET /sprints/{id}", controller.GetById)
 	mux.HandleFunc("POST /sprints", controller.Create)
 	mux.HandleFunc("PATCH /sprints/{id}", controller.Update)
+	mux.HandleFunc("DELETE /sprints/{id}", controller.DeleteById)
 }

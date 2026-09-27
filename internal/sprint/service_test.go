@@ -25,6 +25,50 @@ type fakeSprintRepository struct {
 		id uuid.UUID,
 		payload UpdateSprintModel,
 	) error
+
+	getAllFn func(
+		ctx context.Context,
+	) ([]Sprint, error)
+
+	getByIdFn func(
+		ctx context.Context,
+		id uuid.UUID,
+	) (*Sprint, error)
+
+	deleteByIdFn func(
+		ctx context.Context,
+		id uuid.UUID,
+	) error
+}
+
+func (f *fakeSprintRepository) GetAll(ctx context.Context) ([]Sprint, error) {
+	if f.getAllFn == nil {
+		panic("unexpected call to GetAll")
+	}
+
+	return f.getAllFn(ctx)
+}
+
+func (f *fakeSprintRepository) GetById(
+	ctx context.Context,
+	id uuid.UUID,
+) (*Sprint, error) {
+	if f.getByIdFn == nil {
+		panic("unexpected call to GetById")
+	}
+
+	return f.getByIdFn(ctx, id)
+}
+
+func (f *fakeSprintRepository) DeleteById(
+	ctx context.Context,
+	id uuid.UUID,
+) error {
+	if f.deleteByIdFn == nil {
+		panic("unexpected call to DeleteById")
+	}
+
+	return f.deleteByIdFn(ctx, id)
 }
 
 func (f *fakeSprintRepository) Update(
@@ -546,6 +590,172 @@ func TestSprintServiceUpdate(t *testing.T) {
 			UpdateSprintModel{Status: &status},
 		)
 
+		if !errors.Is(err, repositoryError) {
+			t.Fatalf("expected repository error, got %v", err)
+		}
+	})
+}
+
+func TestSprintServiceGetAll(t *testing.T) {
+	t.Run("returns all sprints", func(t *testing.T) {
+		expected := []Sprint{
+			{
+				ID:         uuid.New(),
+				SprintDate: sprintTestDate(),
+				Status:     Creating,
+			},
+		}
+
+		repository := &fakeSprintRepository{
+			getAllFn: func(ctx context.Context) ([]Sprint, error) {
+				return expected, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		sprints, err := service.GetAll(context.Background())
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if len(sprints) != len(expected) {
+			t.Fatalf("expected %d sprint, got %d", len(expected), len(sprints))
+		}
+
+		if sprints[0].ID != expected[0].ID {
+			t.Errorf("expected id %q, got %q", expected[0].ID, sprints[0].ID)
+		}
+	})
+
+	t.Run("propagates repository error", func(t *testing.T) {
+		repositoryError := errors.New("get all sprints failed")
+
+		repository := &fakeSprintRepository{
+			getAllFn: func(ctx context.Context) ([]Sprint, error) {
+				return nil, repositoryError
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		sprints, err := service.GetAll(context.Background())
+		if !errors.Is(err, repositoryError) {
+			t.Fatalf("expected repository error, got %v", err)
+		}
+
+		if sprints != nil {
+			t.Errorf("expected nil sprints, got %v", sprints)
+		}
+	})
+}
+
+func TestSprintServiceGetById(t *testing.T) {
+	t.Run("returns sprint by id", func(t *testing.T) {
+		id := uuid.New()
+		expected := &Sprint{
+			ID:         id,
+			SprintDate: sprintTestDate(),
+			Status:     InProgress,
+		}
+
+		repository := &fakeSprintRepository{
+			getByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+			) (*Sprint, error) {
+				if receivedID != id {
+					t.Errorf("expected id %q, got %q", id, receivedID)
+				}
+
+				return expected, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		sprint, err := service.GetById(context.Background(), id)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if sprint != expected {
+			t.Errorf("expected sprint %v, got %v", expected, sprint)
+		}
+	})
+
+	t.Run("propagates repository error", func(t *testing.T) {
+		repositoryError := ErrSprintNotFound
+
+		repository := &fakeSprintRepository{
+			getByIdFn: func(
+				ctx context.Context,
+				id uuid.UUID,
+			) (*Sprint, error) {
+				return nil, repositoryError
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		sprint, err := service.GetById(context.Background(), uuid.New())
+		if !errors.Is(err, repositoryError) {
+			t.Fatalf("expected repository error, got %v", err)
+		}
+
+		if sprint != nil {
+			t.Errorf("expected nil sprint, got %v", sprint)
+		}
+	})
+}
+
+func TestSprintServiceDeleteById(t *testing.T) {
+	t.Run("deletes sprint by id", func(t *testing.T) {
+		id := uuid.New()
+		deleteCalled := false
+
+		repository := &fakeSprintRepository{
+			deleteByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+			) error {
+				deleteCalled = true
+
+				if receivedID != id {
+					t.Errorf("expected id %q, got %q", id, receivedID)
+				}
+
+				return nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.DeleteById(context.Background(), id)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if !deleteCalled {
+			t.Error("expected DeleteById to be called")
+		}
+	})
+
+	t.Run("propagates repository error", func(t *testing.T) {
+		repositoryError := ErrSprintNotFound
+
+		repository := &fakeSprintRepository{
+			deleteByIdFn: func(
+				ctx context.Context,
+				id uuid.UUID,
+			) error {
+				return repositoryError
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.DeleteById(context.Background(), uuid.New())
 		if !errors.Is(err, repositoryError) {
 			t.Fatalf("expected repository error, got %v", err)
 		}

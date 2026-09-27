@@ -3,6 +3,7 @@ package sprint
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,7 +19,10 @@ var (
 
 type SprintServiceContract interface {
 	Create(ctx context.Context, sprint CreateSprintModel) error
+	GetAll(ctx context.Context) ([]Sprint, error)
+	GetById(ctx context.Context, id uuid.UUID) (*Sprint, error)
 	Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error
+	DeleteById(ctx context.Context, id uuid.UUID) error
 }
 
 type SprintService struct {
@@ -61,6 +65,24 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 	return nil
 }
 
+func (s *SprintService) GetAll(ctx context.Context) ([]Sprint, error) {
+	sprints, err := s.repo.GetAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Error to get all sprints: %w", err)
+	}
+
+	return sprints, nil
+}
+
+func (s *SprintService) GetById(ctx context.Context, id uuid.UUID) (*Sprint, error) {
+	sprint, err := s.repo.GetById(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return sprint, nil
+}
+
 func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error {
 	if payload.Name == nil && payload.Status == nil {
 		return ErrSprintUpdateEmpty
@@ -75,6 +97,14 @@ func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload Update
 	}
 
 	if err := s.repo.Update(ctx, id, payload); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
+	if err := s.repo.DeleteById(ctx, id); err != nil {
 		return err
 	}
 

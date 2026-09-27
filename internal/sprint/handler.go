@@ -36,6 +36,39 @@ func NewSprintHandler(service SprintServiceContract) *SprintHandler {
 	}
 }
 
+func (h *SprintHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	sprints, err := h.service.GetAll(r.Context())
+	if err != nil {
+		slog.Error("failed to get all sprints", "error", err)
+		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
+		return
+	}
+
+	utils.WriteJson(w, http.StatusOK, sprints)
+}
+
+func (h *SprintHandler) GetById(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid sprint id"})
+		return
+	}
+
+	sprint, err := h.service.GetById(r.Context(), id)
+
+	switch {
+	case errors.Is(err, ErrSprintNotFound):
+		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
+
+	case err != nil:
+		slog.Error("failed to get sprint by id", "error", err)
+		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
+
+	default:
+		utils.WriteJson(w, http.StatusOK, sprint)
+	}
+}
+
 func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req updateSprintRequest
 
@@ -79,6 +112,28 @@ func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func (h *SprintHandler) DeleteById(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid sprint id"})
+		return
+	}
+
+	err = h.service.DeleteById(r.Context(), id)
+
+	switch {
+	case errors.Is(err, ErrSprintNotFound):
+		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
+
+	case err != nil:
+		slog.Error("failed to delete sprint", "error", err)
+		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
+
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
