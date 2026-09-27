@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type fakeSprintRepository struct {
@@ -17,6 +19,24 @@ type fakeSprintRepository struct {
 		ctx context.Context,
 		date time.Time,
 	) (bool, error)
+
+	updateFn func(
+		ctx context.Context,
+		id uuid.UUID,
+		payload UpdateSprintModel,
+	) error
+}
+
+func (f *fakeSprintRepository) Update(
+	ctx context.Context,
+	id uuid.UUID,
+	payload UpdateSprintModel,
+) error {
+	if f.updateFn == nil {
+		panic("unexpected call to Update")
+	}
+
+	return f.updateFn(ctx, id, payload)
 }
 
 func (f *fakeSprintRepository) Create(
@@ -132,7 +152,7 @@ func TestSprintServiceCreate(t *testing.T) {
 			CreateSprintModel{
 				Name:       &name,
 				SprintDate: date,
-				Status: SprintStatus("finished"),
+				Status:     SprintStatus("finished"),
 			},
 		)
 
@@ -371,4 +391,163 @@ func TestSprintServiceCreate(t *testing.T) {
 			}
 		},
 	)
+}
+
+func TestSprintServiceUpdate(t *testing.T) {
+	t.Run("updates sprint name and status", func(t *testing.T) {
+		ctx := context.Background()
+		id := uuid.New()
+		name := "Sprint atualizada"
+		status := InProgress
+
+		updateCalled := false
+
+		repository := &fakeSprintRepository{
+			updateFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+				payload UpdateSprintModel,
+			) error {
+				updateCalled = true
+
+				if receivedID != id {
+					t.Errorf("expected id %q, got %q", id, receivedID)
+				}
+
+				if payload.Name == nil || *payload.Name != name {
+					t.Errorf("expected name %q, got %v", name, payload.Name)
+				}
+
+				if payload.Status == nil || *payload.Status != status {
+					t.Errorf("expected status %q, got %v", status, payload.Status)
+				}
+
+				return nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.Update(
+			ctx,
+			id,
+			UpdateSprintModel{
+				Name:   &name,
+				Status: &status,
+			},
+		)
+
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if !updateCalled {
+			t.Error("expected Update to be called")
+		}
+	})
+
+	t.Run("updates only sprint name", func(t *testing.T) {
+		name := "Sprint renomeada"
+
+		repository := &fakeSprintRepository{
+			updateFn: func(
+				ctx context.Context,
+				id uuid.UUID,
+				payload UpdateSprintModel,
+			) error {
+				if payload.Name == nil || *payload.Name != name {
+					t.Errorf("expected name %q, got %v", name, payload.Name)
+				}
+
+				if payload.Status != nil {
+					t.Errorf("expected nil status, got %q", *payload.Status)
+				}
+
+				return nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.Update(
+			context.Background(),
+			uuid.New(),
+			UpdateSprintModel{Name: &name},
+		)
+
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("returns error when update is empty", func(t *testing.T) {
+		service := NewSprintService(&fakeSprintRepository{})
+
+		err := service.Update(
+			context.Background(),
+			uuid.New(),
+			UpdateSprintModel{},
+		)
+
+		if !errors.Is(err, ErrSprintUpdateEmpty) {
+			t.Fatalf("expected ErrSprintUpdateEmpty, got %v", err)
+		}
+	})
+
+	t.Run("returns error when name is blank", func(t *testing.T) {
+		name := "   "
+		service := NewSprintService(&fakeSprintRepository{})
+
+		err := service.Update(
+			context.Background(),
+			uuid.New(),
+			UpdateSprintModel{Name: &name},
+		)
+
+		if !errors.Is(err, ErrSprintNameEmpty) {
+			t.Fatalf("expected ErrSprintNameEmpty, got %v", err)
+		}
+	})
+
+	t.Run("returns error when status is invalid", func(t *testing.T) {
+		status := SprintStatus("paused")
+		service := NewSprintService(&fakeSprintRepository{})
+
+		err := service.Update(
+			context.Background(),
+			uuid.New(),
+			UpdateSprintModel{Status: &status},
+		)
+
+		if !errors.Is(err, ErrSprintStatusInvalid) {
+			t.Fatalf("expected ErrSprintStatusInvalid, got %v", err)
+		}
+	})
+
+	t.Run("propagates repository error", func(t *testing.T) {
+		repositoryError := errors.New("update sprint failed")
+		status := Finished
+
+		repository := &fakeSprintRepository{
+			updateFn: func(
+				ctx context.Context,
+				id uuid.UUID,
+				payload UpdateSprintModel,
+			) error {
+				return repositoryError
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.Update(
+			context.Background(),
+			uuid.New(),
+			UpdateSprintModel{Status: &status},
+		)
+
+		if !errors.Is(err, repositoryError) {
+			t.Fatalf("expected repository error, got %v", err)
+		}
+	})
 }

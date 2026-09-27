@@ -8,32 +8,81 @@ import (
 	"time"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/utils"
+	"github.com/google/uuid"
 )
 
-
 type SprintHandler struct {
-	service *SprintService
+	service SprintServiceContract
 }
 
-type createSprintRequest struct{
+type createSprintRequest struct {
 	Name       *string      `json:"name"`
 	SprintDate time.Time    `json:"sprint_date"`
 	Status     SprintStatus `json:"status"`
 }
 
+type updateSprintRequest struct {
+	Name   *string       `json:"name"`
+	Status *SprintStatus `json:"status"`
+}
 
 type errorResponse struct {
 	Error string `json:"error"`
 }
 
-
-func NewSprintHandler(service *SprintService) *SprintHandler{
+func NewSprintHandler(service SprintServiceContract) *SprintHandler {
 	return &SprintHandler{
 		service: service,
 	}
 }
 
-func (h *SprintHandler)Create(w http.ResponseWriter, r *http.Request){
+func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
+	var req updateSprintRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid request body"})
+		return
+	}
+
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid sprint id"})
+		return
+	}
+
+	payload := UpdateSprintModel{
+		Name:   req.Name,
+		Status: req.Status,
+	}
+
+	err = h.service.Update(r.Context(), id, payload)
+
+	switch {
+	case errors.Is(err, ErrSprintUpdateEmpty):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+
+	case errors.Is(err, ErrSprintNameEmpty):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+
+	case errors.Is(err, ErrSprintStatusInvalid):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+
+	case errors.Is(err, ErrSprintNotFound):
+		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
+
+	case err != nil:
+		slog.Error("failed to update sprint", "error", err)
+		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
+
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req createSprintRequest
 
 	decode := json.NewDecoder(r.Body)
@@ -41,32 +90,31 @@ func (h *SprintHandler)Create(w http.ResponseWriter, r *http.Request){
 
 	if err := decode.Decode(&req); err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid request body"})
-		return 
+		return
 	}
 
 	payload := CreateSprintModel{
-		Name: req.Name,
+		Name:       req.Name,
 		SprintDate: req.SprintDate,
-		Status: req.Status,
+		Status:     req.Status,
 	}
-
 
 	err := h.service.Create(r.Context(), payload)
 
-	switch{
+	switch {
 	case errors.Is(err, ErrSprintAlreadyExists):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-	
+
 	case errors.Is(err, ErrSprintNameEmpty):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-	
+
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-	
+
 	case err != nil:
 		slog.Error("failed to create sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
-	
+
 	default:
 		w.WriteHeader(http.StatusCreated)
 	}

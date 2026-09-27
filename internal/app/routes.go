@@ -27,10 +27,11 @@ func RegisterSubjectsRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	mux.HandleFunc("POST /subjects/import", controller.CreateBatch)
 }
 
-func RegisterSprintRoutes(mux *http.ServeMux, db *sqlx.DB){
+func RegisterSprintRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	repository := sprint.NewSprintRepository(db)
 	service := sprint.NewSprintService(repository)
 	controller := sprint.NewSprintHandler(service)
 
 	mux.HandleFunc("POST /sprints", controller.Create)
+	mux.HandleFunc("PATCH /sprints/{id}", controller.Update)
 }
