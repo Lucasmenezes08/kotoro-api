@@ -11,13 +11,14 @@ import (
 )
 
 var (
-	ErrSprintNameEmpty     error = errors.New("Sprint name is empty")
-	ErrSprintNotFound      error = errors.New("Sprint not found")
-	ErrSprintAlreadyExists error = errors.New("Only one sprint per day is allowed")
-	ErrSprintUpdateEmpty   error = errors.New("Update fields must have one value at least")
-	ErrSprintStatusInvalid error = errors.New("Sprint status is invalid")
-	ErrSprintDateInPast    error = errors.New("sprint date cannot be in the past")
-	ErrSprintDateRequired  error = errors.New("sprint date is required")
+	ErrSprintNameEmpty               error = errors.New("Sprint name is empty")
+	ErrSprintNotFound                error = errors.New("Sprint not found")
+	ErrSprintAlreadyExists           error = errors.New("Only one sprint per day is allowed")
+	ErrSprintUpdateEmpty             error = errors.New("Update fields must have one value at least")
+	ErrSprintStatusInvalid           error = errors.New("Sprint status is invalid")
+	ErrSprintDateInPast              error = errors.New("sprint date cannot be in the past")
+	ErrSprintDateRequired            error = errors.New("sprint date is required")
+	ErrSprintDeleteStatusNotCreating error = errors.New("Sprint can only be deleted while its status is 'creating'")
 )
 
 type SprintServiceContract interface {
@@ -119,6 +120,15 @@ func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload Update
 }
 
 func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
+	sprint, err := s.repo.GetById(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if sprint.Status != Creating {
+		return ErrSprintDeleteStatusNotCreating
+	}
+
 	if err := s.repo.DeleteById(ctx, id); err != nil {
 		return err
 	}

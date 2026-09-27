@@ -751,6 +751,19 @@ func TestSprintServiceDeleteById(t *testing.T) {
 		deleteCalled := false
 
 		repository := &fakeSprintRepository{
+			getByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+			) (*Sprint, error) {
+				if receivedID != id {
+					t.Errorf("expected id %q, got %q", id, receivedID)
+				}
+
+				return &Sprint{
+					ID:     id,
+					Status: Creating,
+				}, nil
+			},
 			deleteByIdFn: func(
 				ctx context.Context,
 				receivedID uuid.UUID,
@@ -777,13 +790,75 @@ func TestSprintServiceDeleteById(t *testing.T) {
 		}
 	})
 
-	t.Run("propagates repository error", func(t *testing.T) {
+	for _, status := range []SprintStatus{
+		InProgress,
+		Finished,
+		Abandoned,
+	} {
+		t.Run("does not delete sprint with status "+string(status), func(t *testing.T) {
+			id := uuid.New()
+
+			repository := &fakeSprintRepository{
+				getByIdFn: func(
+					ctx context.Context,
+					receivedID uuid.UUID,
+				) (*Sprint, error) {
+					return &Sprint{
+						ID:     id,
+						Status: status,
+					}, nil
+				},
+			}
+
+			service := NewSprintService(repository)
+
+			err := service.DeleteById(context.Background(), id)
+			if !errors.Is(err, ErrSprintDeleteStatusNotCreating) {
+				t.Fatalf(
+					"expected ErrSprintDeleteStatusNotCreating, got %v",
+					err,
+				)
+			}
+		})
+	}
+
+	t.Run("propagates get sprint repository error", func(t *testing.T) {
 		repositoryError := ErrSprintNotFound
 
 		repository := &fakeSprintRepository{
-			deleteByIdFn: func(
+			getByIdFn: func(
 				ctx context.Context,
 				id uuid.UUID,
+			) (*Sprint, error) {
+				return nil, repositoryError
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.DeleteById(context.Background(), uuid.New())
+		if !errors.Is(err, repositoryError) {
+			t.Fatalf("expected repository error, got %v", err)
+		}
+	})
+
+	t.Run("propagates delete repository error", func(t *testing.T) {
+		repositoryError := errors.New("delete sprint failed")
+		id := uuid.New()
+
+		repository := &fakeSprintRepository{
+			getByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+			) (*Sprint, error) {
+				return &Sprint{
+					ID:     id,
+					Status: Creating,
+				}, nil
+			},
+			deleteByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
 			) error {
 				return repositoryError
 			},
@@ -791,7 +866,7 @@ func TestSprintServiceDeleteById(t *testing.T) {
 
 		service := NewSprintService(repository)
 
-		err := service.DeleteById(context.Background(), uuid.New())
+		err := service.DeleteById(context.Background(), id)
 		if !errors.Is(err, repositoryError) {
 			t.Fatalf("expected repository error, got %v", err)
 		}

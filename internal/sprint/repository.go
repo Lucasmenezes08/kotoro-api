@@ -141,20 +141,33 @@ func (r *SprintRepository) Update(ctx context.Context, id uuid.UUID, payload Upd
 }
 
 func (r *SprintRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
-	query := "UPDATE sprints SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL"
+	query := `
+		UPDATE sprints
+		SET deleted_at = now(), updated_at = now()
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND status = $2::sprint_status
+		RETURNING id
+	`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	var deletedID uuid.UUID
+
+	err := r.db.GetContext(ctx, &deletedID, query, id, Creating)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, getErr := r.GetById(ctx, id)
+
+		switch {
+		case errors.Is(getErr, ErrSprintNotFound):
+			return ErrSprintNotFound
+		case getErr != nil:
+			return fmt.Errorf("Error to check sprint after delete: %w", getErr)
+		default:
+			return ErrSprintDeleteStatusNotCreating
+		}
+	}
+
 	if err != nil {
 		return fmt.Errorf("Error to delete sprint by id: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("Error to get deleted sprint rows count: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return ErrSprintNotFound
 	}
 
 	return nil

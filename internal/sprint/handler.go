@@ -127,6 +127,9 @@ func (h *SprintHandler) DeleteById(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
 
+	case errors.Is(err, ErrSprintDeleteStatusNotCreating):
+		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
+
 	case err != nil:
 		slog.Error("failed to delete sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
