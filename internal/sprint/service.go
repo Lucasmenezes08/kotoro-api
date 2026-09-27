@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,6 +16,8 @@ var (
 	ErrSprintAlreadyExists error = errors.New("Only one sprint per day is allowed")
 	ErrSprintUpdateEmpty   error = errors.New("Update fields must have one value at least")
 	ErrSprintStatusInvalid error = errors.New("Sprint status is invalid")
+	ErrSprintDateInPast    error = errors.New("sprint date cannot be in the past")
+	ErrSprintDateRequired  error = errors.New("sprint date is required")
 )
 
 type SprintServiceContract interface {
@@ -36,6 +39,24 @@ func NewSprintService(repo SprintRepositoryContract) *SprintService {
 }
 
 func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) error {
+	if payload.SprintDate.IsZero() {
+		return ErrSprintDateRequired
+	}
+
+	location := payload.SprintDate.Location()
+	timeToday := beginningOfDay(time.Now(), location)
+
+	sprintDate := beginningOfDay(payload.SprintDate, location)
+
+	if sprintDate.Before(timeToday) {
+		return ErrSprintDateInPast
+	}
+
+	if payload.Name != nil {
+		if strings.TrimSpace(*payload.Name) == "" {
+			return ErrSprintNameEmpty
+		}
+	}
 
 	exist, err := s.repo.ExistsByDate(ctx, payload.SprintDate)
 	if err != nil {
@@ -44,12 +65,6 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 
 	if exist {
 		return ErrSprintAlreadyExists
-	}
-
-	if payload.Name != nil {
-		if strings.TrimSpace(*payload.Name) == "" {
-			return ErrSprintNameEmpty
-		}
 	}
 
 	input := CreateSprintModel{
@@ -118,4 +133,22 @@ func validSprintStatus(status SprintStatus) bool {
 	default:
 		return false
 	}
+}
+
+func beginningOfDay(
+	value time.Time,
+	location *time.Location,
+) time.Time {
+	localTime := value.In(location)
+
+	return time.Date(
+		localTime.Year(),
+		localTime.Month(),
+		localTime.Day(),
+		0,
+		0,
+		0,
+		0,
+		location,
+	)
 }

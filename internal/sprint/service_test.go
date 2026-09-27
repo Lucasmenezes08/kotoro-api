@@ -112,10 +112,12 @@ func stringPointer(value string) *string {
 }
 
 func sprintTestDate() time.Time {
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1)
+
 	return time.Date(
-		2026,
-		time.September,
-		25,
+		tomorrow.Year(),
+		tomorrow.Month(),
+		tomorrow.Day(),
 		0,
 		0,
 		0,
@@ -260,6 +262,40 @@ func TestSprintServiceCreate(t *testing.T) {
 
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("returns error when sprint date is required", func(t *testing.T) {
+		service := NewSprintService(&fakeSprintRepository{})
+
+		err := service.Create(
+			context.Background(),
+			CreateSprintModel{},
+		)
+
+		if !errors.Is(err, ErrSprintDateRequired) {
+			t.Fatalf(
+				"expected ErrSprintDateRequired, got %v",
+				err,
+			)
+		}
+	})
+
+	t.Run("returns error when sprint date is in the past", func(t *testing.T) {
+		yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+		service := NewSprintService(&fakeSprintRepository{})
+
+		err := service.Create(
+			context.Background(),
+			CreateSprintModel{SprintDate: yesterday},
+		)
+
+		if !errors.Is(err, ErrSprintDateInPast) {
+			t.Fatalf(
+				"expected ErrSprintDateInPast, got %v",
+				err,
+			)
 		}
 	})
 

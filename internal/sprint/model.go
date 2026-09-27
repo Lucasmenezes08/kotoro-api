@@ -6,22 +6,18 @@ import (
 	"github.com/google/uuid"
 )
 
-
-
-
 type SprintStatus string
 
 var (
-	Creating SprintStatus = "creating"
+	Creating   SprintStatus = "creating"
 	InProgress SprintStatus = "in_progress"
-	Finished SprintStatus = "finished"
-	Abandoned SprintStatus = "abandoned"
+	Finished   SprintStatus = "finished"
+	Abandoned  SprintStatus = "abandoned"
 )
-
 
 type Sprint struct {
 	ID          uuid.UUID    `db:"id"`
-	Name        *string       `db:"name"`
+	Name        *string      `db:"name"`
 	SprintDate  time.Time    `db:"sprint_date"`
 	Status      SprintStatus `db:"status"`
 	StartedAt   *time.Time   `db:"started_at"`
@@ -30,4 +26,3 @@ type Sprint struct {
 	UpdatedAt   time.Time    `db:"updated_at"`
 	DeletedAt   *time.Time   `db:"deleted_at"`
 }
-

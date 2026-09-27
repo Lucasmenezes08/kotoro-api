@@ -16,9 +16,8 @@ type SprintHandler struct {
 }
 
 type createSprintRequest struct {
-	Name       *string      `json:"name"`
-	SprintDate time.Time    `json:"sprint_date"`
-	Status     SprintStatus `json:"status"`
+	Name       *string `json:"name"`
+	SprintDate string  `json:"sprint_date"`
 }
 
 type updateSprintRequest struct {
@@ -148,10 +147,35 @@ func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.SprintDate == "" {
+		utils.WriteJson(
+			w,
+			http.StatusBadRequest,
+			errorResponse{Error: ErrSprintDateRequired.Error()},
+		)
+		return
+	}
+
+	sprintDate, errDate := time.ParseInLocation(
+		time.DateOnly,
+		req.SprintDate,
+		time.Local,
+	)
+
+	if errDate != nil {
+		utils.WriteJson(
+			w,
+			http.StatusBadRequest,
+			errorResponse{
+				Error: "sprint_date must use YYYY-MM-DD format",
+			},
+		)
+		return
+	}
+
 	payload := CreateSprintModel{
 		Name:       req.Name,
-		SprintDate: req.SprintDate,
-		Status:     req.Status,
+		SprintDate: sprintDate,
 	}
 
 	err := h.service.Create(r.Context(), payload)
@@ -161,6 +185,12 @@ func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 
 	case errors.Is(err, ErrSprintNameEmpty):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+
+	case errors.Is(err, ErrSprintDateRequired):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+
+	case errors.Is(err, ErrSprintDateInPast):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 
 	case errors.Is(err, ErrSprintNotFound):
