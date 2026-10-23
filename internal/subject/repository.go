@@ -45,6 +45,20 @@ func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
 	}
 }
 
+func (s *SubjectRepository) GetById(ctx context.Context, id uuid.UUID) (*Subject, error) {
+	var subject Subject
+	query := `SELECT id, name, color, created_at, updated_at, deleted_at
+		FROM subjects WHERE id = $1 AND deleted_at IS NULL LIMIT 1`
+	err := s.db.GetContext(ctx, &subject, query, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSubjectNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subject by id: %w", err)
+	}
+	return &subject, nil
+}
+
 func (s *SubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
 	subject := make([]Subject, 0)
 	const query = `
