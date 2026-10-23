@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 
+	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
@@ -14,6 +15,21 @@ func RegisterRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+}
+
+func RegisterBlockTaskRoutes(mux *http.ServeMux, db *sqlx.DB) {
+	repository := blocktasks.NewBlockTaskRepository(db)
+	sprintRepository := sprint.NewSprintRepository(db)
+	blockRepository := sprintblocks.NewSprintBlockRepository(db)
+	service := blocktasks.NewBlockTaskService(repository, sprintRepository, blockRepository)
+	handler := blocktasks.NewBlockTaskHandler(service)
+
+	mux.HandleFunc("POST /sprints/{sprintID}/blocks/{blockID}/tasks", handler.Create)
+	mux.HandleFunc("GET /sprints/{sprintID}/blocks/{blockID}/tasks", handler.GetAll)
+	mux.HandleFunc("PUT /sprints/{sprintID}/blocks/{blockID}/tasks/reorder", handler.Reorder)
+	mux.HandleFunc("GET /sprints/{sprintID}/blocks/{blockID}/tasks/{taskID}", handler.GetByID)
+	mux.HandleFunc("PATCH /sprints/{sprintID}/blocks/{blockID}/tasks/{taskID}", handler.Update)
+	mux.HandleFunc("DELETE /sprints/{sprintID}/blocks/{blockID}/tasks/{taskID}", handler.Delete)
 }
 
 func RegisterSprintBlockRoutes(mux *http.ServeMux, db *sqlx.DB) {
