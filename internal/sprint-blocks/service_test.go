@@ -192,28 +192,16 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
-	for _, test := range []struct {
-		name                              string
-		subjectConflict, positionConflict bool
-		want                              error
-	}{
-		{"subject conflict", true, false, ErrSprintBlockSubjectConflict},
-		{"position conflict", false, true, ErrSprintBlockPositionConflict},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repo := &fakeBlockRepository{
-				existsSubjectFn: func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error) {
-					return test.subjectConflict, nil
-				},
-				existsPositionFn: func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error) { return test.positionConflict, nil },
-			}
-			service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-			_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
-			if !errors.Is(err, test.want) {
-				t.Fatalf("expected %v, got %v", test.want, err)
-			}
-		})
-	}
+	t.Run("position conflict", func(t *testing.T) {
+		repo := &fakeBlockRepository{
+			existsPositionFn: func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error) { return true, nil },
+		}
+		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+		if !errors.Is(err, ErrSprintBlockPositionConflict) {
+			t.Fatalf("expected %v, got %v", ErrSprintBlockPositionConflict, err)
+		}
+	})
 }
 
 func TestSprintBlockServiceReads(t *testing.T) {

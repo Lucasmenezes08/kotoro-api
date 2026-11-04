@@ -73,9 +73,6 @@ func (s *SprintBlockService) Create(ctx context.Context, userID, sprintID uuid.U
 	if err := s.requireSubject(ctx, userID, input.SubjectID); err != nil {
 		return nil, err
 	}
-	if err := s.checkSubjectConflict(ctx, sprintID, input.SubjectID, nil); err != nil {
-		return nil, err
-	}
 	if err := s.checkPositionConflict(ctx, sprintID, input.Position, nil); err != nil {
 		return nil, err
 	}
@@ -164,9 +161,6 @@ func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, block
 	}
 	if input.SubjectID != nil {
 		if err := s.requireSubject(ctx, userID, *input.SubjectID); err != nil {
-			return nil, err
-		}
-		if err := s.checkSubjectConflict(ctx, sprintID, *input.SubjectID, &blockID); err != nil {
 			return nil, err
 		}
 	}
