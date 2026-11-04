@@ -515,6 +515,97 @@ A inteligência artificial foi utilizada como ferramenta de apoio para revisão 
 | Consistência | Uso futuro de publisher confirms, ack manual, idempotência, retry e DLQ |
 | Cronômetros | Persistência por timestamps em vez de goroutines permanentes |
 
+## Execução de ciclos de estudo (`study-cycles`)
+
+A fase de execução de uma sprint ocorre por meio de ciclos de estudo (`study_cycles`), que controlam o tempo efetivamente estudado em cada bloco ou conjunto de tarefas sem manter goroutines ou timers em memória por sessão.
+
+### Máquina de estados do ciclo
+
+Status possíveis (`status`):
+
+- `em_andamento`
+- `pausado`
+- `finalizado`
+- `cancelado`
+
+Motivos terminais de encerramento (`cycle_stop_reason`):
+
+- `concluido` → `finalizado`
+- `tempo_esgotado` → `finalizado`
+- `cancelado` → `cancelado`
+
+```mermaid
+stateDiagram-v2
+    [*] --> em_andamento: Play
+    em_andamento --> pausado: Pause
+    pausado --> em_andamento: Resume
+    em_andamento --> finalizado: Stop (concluido | tempo_esgotado)
+    pausado --> finalizado: Stop (concluido | tempo_esgotado)
+    em_andamento --> cancelado: Stop (cancelado)
+    pausado --> cancelado: Stop (cancelado)
+```
+
+Pausar (`pause`) não é um motivo terminal de parada: o ciclo permanece aberto com status `pausado` para posterior retomada (`resume`) mantendo o mesmo `sequence_number`.
+
+### Modelo de tempo
+
+Os timestamps em UTC no PostgreSQL são a fonte de verdade:
+
+- `started_at`: instante em que o ciclo foi iniciado pela primeira vez;
+- `running_since`: início do segmento em execução atual (`null` quando pausado ou encerrado);
+- `paused_at`: instante da pausa mais recente (`null` quando em execução);
+- `ended_at`: instante de encerramento terminal (`finalizado` ou `cancelado`);
+- `elapsed_seconds`: soma consolidada dos intervalos já executados;
+- `planned_duration_seconds`: duração configurada quando `timer_type = temporizado`;
+- `server_now`: horário atual do servidor retornado nas respostas HTTP para sincronização visual no frontend.
+
+### Fronteiras transacionais e concorrência
+
+| Operação | Estratégia de persistência e sincronização |
+| --- | --- |
+| `Play` | Transação curta (`BEGIN ... COMMIT`): bloqueia a sprint (`SELECT ... FOR UPDATE`), valida status `in_progress`, verifica inexistência de ciclo ativo, seleciona e bloqueia o bloco elegível por `position`, calcula `sequence_number`, insere o ciclo, associa `study_cycle_tasks` e atualiza o bloco de `pendente` para `em andamento`. Protegido também pelos índices únicos `uq_study_cycles_active_sprint` e `uq_study_cycles_sprint_sequence`. |
+| `Pause` | Atualização condicional atômica (`UPDATE study_cycles ... WHERE id = $1 AND status = 'em_andamento' RETURNING ...`), consolidando `elapsed_seconds` sem abrir transação explícita. |
+| `Resume` | Atualização condicional atômica (`UPDATE study_cycles ... WHERE id = $1 AND status = 'pausado' RETURNING ...`), preservando `started_at` e `elapsed_seconds`. |
+| `Stop` | Transação curta (`BEGIN ... COMMIT`): bloqueia o ciclo (`FOR UPDATE`), consolida o último intervalo se estava `em_andamento`, aplica o status terminal e, quando `reason = concluido`, conclui as tarefas selecionadas (`feita`) e finaliza o bloco (`finalizado`) quando todas as tarefas ativas atingem estado terminal. |
+
+### Endpoints de execução de ciclos
+
+| Método | Rota | Status de sucesso |
+| --- | --- | --- |
+| `POST` | `/sprints/{sprintID}/study-cycles/play` | `201 Created` |
+| `POST` | `/study-cycles/{cycleID}/pause` | `200 OK` |
+| `POST` | `/study-cycles/{cycleID}/resume` | `200 OK` |
+| `POST` | `/study-cycles/{cycleID}/stop` | `200 OK` |
+
+Exemplo de início de ciclo (`Play`):
+
+```http
+POST /sprints/{sprintID}/study-cycles/play
+Content-Type: application/json
+
+{
+  "execution_mode": "bloco_materia",
+  "timer_type": "cronometro_livre",
+  "planned_duration_seconds": null,
+  "block_task_ids": []
+}
+```
+
+Exemplo de encerramento de ciclo (`Stop`):
+
+```http
+POST /study-cycles/{cycleID}/stop
+Content-Type: application/json
+
+{
+  "reason": "concluido"
+}
+```
+
+### Próximo passo: Transactional Outbox
+
+A transação de `Stop` já delimita a fronteira atômica onde os registros da tabela `outbox_events` (como `study_cycle.finished` e `block_task.completed`) serão inseridos na mesma transação do PostgreSQL antes da publicação assíncrona pelo Outbox Relay no RabbitMQ.
+
 ## Limitações conhecidas da primeira entrega
 
 - o sistema ainda não possui autenticação ou isolamento por usuário;
