@@ -2,7 +2,6 @@ package studycycles
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -189,7 +188,93 @@ func (s *StudyCycleService) Resume(ctx context.Context, cycleID uuid.UUID) (Stud
 }
 
 func (s *StudyCycleService) Stop(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
-	return StudyCycle{}, errors.New("not implemented")
+	if !validStopReason(input.Reason) {
+		return StudyCycle{}, ErrInvalidStopReason
+	}
+
+	var stoppedCycle StudyCycle
+	err := s.repo.WithinTransaction(ctx, func(ctx context.Context, tx StudyCycleTxRepositoryContract) error {
+		existing, err := tx.LockCycleByID(ctx, cycleID)
+		if err != nil {
+			return err
+		}
+
+		now := s.now().UTC()
+		transitioned, err := existing.ApplyStop(now, input.Reason)
+		if err != nil {
+			return err
+		}
+
+		updated, err := tx.StopCycleConditional(ctx, StopStudyCycleModel{
+			ID:             cycleID,
+			ExpectedStatus: existing.Status,
+			Status:         transitioned.Status,
+			EndedAt:        now,
+			ElapsedSeconds: transitioned.ElapsedSeconds,
+			StopReason:     input.Reason,
+		})
+		if err != nil {
+			return err
+		}
+
+		if input.Reason == CycleStopReasonCompleted {
+			switch existing.ExecutionMode {
+			case ExecutionModeSingleTask, ExecutionModeMultipleTasks:
+				taskIDs, err := tx.GetCycleTaskIDs(ctx, cycleID)
+				if err != nil {
+					return fmt.Errorf("get study cycle task ids: %w", err)
+				}
+				if len(taskIDs) > 0 {
+					if err := tx.CompleteCycleTasks(ctx, cycleID, now); err != nil {
+						return fmt.Errorf("complete study cycle tasks: %w", err)
+					}
+					if err := tx.UpdateTasksStatus(ctx, existing.SprintBlockID, taskIDs, blocktasks.TaskDone, &now); err != nil {
+						return fmt.Errorf("update block tasks status: %w", err)
+					}
+				}
+
+				activeTasks, err := tx.GetActiveTasksByBlockID(ctx, existing.SprintBlockID)
+				if err != nil {
+					return fmt.Errorf("get active block tasks: %w", err)
+				}
+				if len(activeTasks) > 0 && allActiveTasksTerminal(activeTasks) {
+					if err := tx.UpdateBlockStatus(ctx, existing.SprintBlockID, sprintblocks.Finished, nil, &now); err != nil {
+						return fmt.Errorf("finish sprint block: %w", err)
+					}
+				}
+			case ExecutionModeSubjectBlock:
+				activeTasks, err := tx.GetActiveTasksByBlockID(ctx, existing.SprintBlockID)
+				if err != nil {
+					return fmt.Errorf("get active block tasks: %w", err)
+				}
+				if allActiveTasksTerminal(activeTasks) {
+					if err := tx.UpdateBlockStatus(ctx, existing.SprintBlockID, sprintblocks.Finished, nil, &now); err != nil {
+						return fmt.Errorf("finish sprint block: %w", err)
+					}
+				}
+			}
+		}
+
+		stoppedCycle = *updated
+		return nil
+	})
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	return stoppedCycle, nil
+}
+
+func allActiveTasksTerminal(tasks []blocktasks.BlockTask) bool {
+	for _, task := range tasks {
+		if task.DeletedAt != nil {
+			continue
+		}
+		if task.Status != blocktasks.TaskDone && task.Status != blocktasks.TaskCancelled {
+			return false
+		}
+	}
+	return true
 }
 
 func selectExecutableBlock(sprintID uuid.UUID, blocks []sprintblocks.SprintBlock) (*sprintblocks.SprintBlock, error) {

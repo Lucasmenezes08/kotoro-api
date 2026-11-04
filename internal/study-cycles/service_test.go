@@ -782,3 +782,367 @@ func TestStudyCycleServiceResume(t *testing.T) {
 		}
 	})
 }
+
+func TestStudyCycleServiceStop(t *testing.T) {
+	startedAt := time.Date(2026, 11, 4, 8, 0, 0, 0, time.UTC)
+	runningSince := startedAt.Add(20 * time.Minute)
+	pausedAt := startedAt.Add(15 * time.Minute)
+	stopAt := runningSince.Add(40 * time.Second)
+
+	t.Run("stops an in-progress cycle and adds its last running interval", func(t *testing.T) {
+		cycleID := uuid.New()
+		blockID := uuid.New()
+		blockFinished := false
+
+		tx := &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(_ context.Context, id uuid.UUID) (*StudyCycle, error) {
+				if id != cycleID {
+					t.Fatalf("expected cycle %v, got %v", cycleID, id)
+				}
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       uuid.New(),
+					SprintBlockID:  blockID,
+					SequenceNumber: 1,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					TimerType:      TimerTypeFree,
+					Status:         StudyCycleInProgress,
+					StartedAt:      startedAt,
+					RunningSince:   &runningSince,
+					ElapsedSeconds: 600,
+				}, nil
+			},
+			stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+				if input.ExpectedStatus != StudyCycleInProgress || input.Status != StudyCycleFinished || input.ElapsedSeconds != 640 || input.StopReason != CycleStopReasonCompleted || !input.EndedAt.Equal(stopAt) {
+					t.Fatalf("unexpected stop model: %#v", input)
+				}
+				reason := input.StopReason
+				endedCopy := input.EndedAt
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintBlockID:  blockID,
+					Status:         input.Status,
+					StartedAt:      startedAt,
+					RunningSince:   nil,
+					EndedAt:        &endedCopy,
+					ElapsedSeconds: input.ElapsedSeconds,
+					StopReason:     &reason,
+				}, nil
+			},
+			getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+				return []blocktasks.BlockTask{}, nil
+			},
+			updateBlockStatusFn: func(_ context.Context, gotBlockID uuid.UUID, status sprintblocks.SprintBlocksStatus, _, completedAt *time.Time) error {
+				if gotBlockID != blockID || status != sprintblocks.Finished || completedAt == nil || !completedAt.Equal(stopAt) {
+					t.Fatalf("unexpected block finish update: id=%v status=%v completedAt=%v", gotBlockID, status, completedAt)
+				}
+				blockFinished = true
+				return nil
+			},
+		}
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+		cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		if err != nil {
+			t.Fatalf("expected stop to succeed, got %v", err)
+		}
+		if cycle.Status != StudyCycleFinished || cycle.ElapsedSeconds != 640 || cycle.RunningSince != nil || cycle.EndedAt == nil || !cycle.EndedAt.Equal(stopAt) {
+			t.Fatalf("unexpected stopped cycle: %#v", cycle)
+		}
+		if !blockFinished || !repo.committed {
+			t.Fatal("expected block finished and transaction committed")
+		}
+	})
+
+	t.Run("stops a paused cycle without adding paused time", func(t *testing.T) {
+		cycleID := uuid.New()
+		blockID := uuid.New()
+
+		tx := &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintBlockID:  blockID,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					Status:         StudyCyclePaused,
+					StartedAt:      startedAt,
+					PausedAt:       &pausedAt,
+					ElapsedSeconds: 900,
+				}, nil
+			},
+			stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+				if input.ExpectedStatus != StudyCyclePaused || input.ElapsedSeconds != 900 {
+					t.Fatalf("expected elapsed_seconds to remain 900, got %#v", input)
+				}
+				reason := input.StopReason
+				endedCopy := input.EndedAt
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintBlockID:  blockID,
+					Status:         input.Status,
+					StartedAt:      startedAt,
+					PausedAt:       &pausedAt,
+					EndedAt:        &endedCopy,
+					ElapsedSeconds: input.ElapsedSeconds,
+					StopReason:     &reason,
+				}, nil
+			},
+			getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+				return []blocktasks.BlockTask{}, nil
+			},
+			updateBlockStatusFn: func(context.Context, uuid.UUID, sprintblocks.SprintBlocksStatus, *time.Time, *time.Time) error {
+				return nil
+			},
+		}
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+		cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		if err != nil {
+			t.Fatalf("expected stop to succeed, got %v", err)
+		}
+		if cycle.ElapsedSeconds != 900 {
+			t.Fatalf("expected elapsed 900, got %d", cycle.ElapsedSeconds)
+		}
+	})
+
+	t.Run("maps completed and time expired to finished and canceled to canceled", func(t *testing.T) {
+		cases := []struct {
+			reason     CycleStopReason
+			wantStatus StudyCycleStatus
+		}{
+			{CycleStopReasonCompleted, StudyCycleFinished},
+			{CycleStopReasonTimeExpired, StudyCycleFinished},
+			{CycleStopReasonCancelled, StudyCycleCancelled},
+		}
+		for _, tc := range cases {
+			cycleID := uuid.New()
+			blockID := uuid.New()
+			tx := &fakeStudyCycleTxRepository{
+				lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{
+						ID:             cycleID,
+						SprintBlockID:  blockID,
+						ExecutionMode:  ExecutionModeSubjectBlock,
+						Status:         StudyCyclePaused,
+						StartedAt:      startedAt,
+						PausedAt:       &pausedAt,
+						ElapsedSeconds: 300,
+					}, nil
+				},
+				stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+					reason := input.StopReason
+					endedCopy := input.EndedAt
+					return &StudyCycle{
+						ID:             cycleID,
+						SprintBlockID:  blockID,
+						Status:         input.Status,
+						EndedAt:        &endedCopy,
+						ElapsedSeconds: input.ElapsedSeconds,
+						StopReason:     &reason,
+					}, nil
+				},
+				getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+					return []blocktasks.BlockTask{{ID: uuid.New(), SprintBlockID: blockID, Status: blocktasks.TaskPending}}, nil
+				},
+			}
+			repo := &fakeStudyCycleRepository{tx: tx}
+			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+			cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: tc.reason})
+			if err != nil {
+				t.Fatalf("for reason %q unexpected error: %v", tc.reason, err)
+			}
+			if cycle.Status != tc.wantStatus || cycle.StopReason == nil || *cycle.StopReason != tc.reason {
+				t.Fatalf("for reason %q expected status %q, got %#v", tc.reason, tc.wantStatus, cycle)
+			}
+		}
+	})
+
+	t.Run("rejects an already terminal cycle and invalid stop reasons", func(t *testing.T) {
+		service := NewStudyCycleService(&fakeStudyCycleRepository{})
+		if _, err := service.Stop(context.Background(), uuid.New(), StopStudyCycleInput{Reason: CycleStopReason("pausado")}); !errors.Is(err, ErrInvalidStopReason) {
+			t.Fatalf("expected ErrInvalidStopReason, got %v", err)
+		}
+
+		for _, status := range []StudyCycleStatus{StudyCycleFinished, StudyCycleCancelled} {
+			tx := &fakeStudyCycleTxRepository{
+				lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{ID: uuid.New(), Status: status, EndedAt: &stopAt}, nil
+				},
+			}
+			repo := &fakeStudyCycleRepository{tx: tx}
+			svc := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+			_, err := svc.Stop(context.Background(), uuid.New(), StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
+				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped, got %v", status, err)
+			}
+			if !repo.rolledBack {
+				t.Fatal("expected rollback on terminal cycle stop")
+			}
+		}
+	})
+
+	t.Run("updates selected tasks correctly and updates block state only when all active tasks are terminal", func(t *testing.T) {
+		cycleID := uuid.New()
+		blockID := uuid.New()
+		task1 := uuid.New()
+		task2 := uuid.New()
+
+		t.Run("keeps block in progress when remaining active task is still pending", func(t *testing.T) {
+			cycleTasksCompleted := false
+			tasksStatusUpdated := false
+			blockFinished := false
+
+			tx := &fakeStudyCycleTxRepository{
+				lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{
+						ID:            cycleID,
+						SprintBlockID: blockID,
+						ExecutionMode: ExecutionModeSingleTask,
+						Status:        StudyCycleInProgress,
+						StartedAt:     startedAt,
+						RunningSince:  &runningSince,
+					}, nil
+				},
+				stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, ElapsedSeconds: input.ElapsedSeconds}, nil
+				},
+				getCycleTaskIDsFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+					return []uuid.UUID{task1}, nil
+				},
+				completeCycleTasksFn: func(_ context.Context, gotCycleID uuid.UUID, completedAt time.Time) error {
+					if gotCycleID != cycleID || !completedAt.Equal(stopAt) {
+						t.Fatal("unexpected CompleteCycleTasks args")
+					}
+					cycleTasksCompleted = true
+					return nil
+				},
+				updateTasksStatusFn: func(_ context.Context, gotBlockID uuid.UUID, ids []uuid.UUID, status blocktasks.BlockTaskStatus, completedAt *time.Time) error {
+					if gotBlockID != blockID || len(ids) != 1 || ids[0] != task1 || status != blocktasks.TaskDone || completedAt == nil || !completedAt.Equal(stopAt) {
+						t.Fatalf("unexpected UpdateTasksStatus args: %v %v %v %v", gotBlockID, ids, status, completedAt)
+					}
+					tasksStatusUpdated = true
+					return nil
+				},
+				getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+					return []blocktasks.BlockTask{
+						{ID: task1, SprintBlockID: blockID, Status: blocktasks.TaskDone},
+						{ID: task2, SprintBlockID: blockID, Status: blocktasks.TaskPending},
+					}, nil
+				},
+				updateBlockStatusFn: func(context.Context, uuid.UUID, sprintblocks.SprintBlocksStatus, *time.Time, *time.Time) error {
+					blockFinished = true
+					return nil
+				},
+			}
+			repo := &fakeStudyCycleRepository{tx: tx}
+			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+			if _, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+				t.Fatalf("expected stop to succeed, got %v", err)
+			}
+			if !cycleTasksCompleted || !tasksStatusUpdated {
+				t.Fatal("expected cycle tasks and block tasks to be marked completed")
+			}
+			if blockFinished {
+				t.Fatal("did not expect block to be finished while task2 is still pending")
+			}
+		})
+
+		t.Run("marks block as finished when all active tasks are terminal", func(t *testing.T) {
+			blockFinished := false
+
+			tx := &fakeStudyCycleTxRepository{
+				lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{
+						ID:            cycleID,
+						SprintBlockID: blockID,
+						ExecutionMode: ExecutionModeMultipleTasks,
+						Status:        StudyCycleInProgress,
+						StartedAt:     startedAt,
+						RunningSince:  &runningSince,
+					}, nil
+				},
+				stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, ElapsedSeconds: input.ElapsedSeconds}, nil
+				},
+				getCycleTaskIDsFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+					return []uuid.UUID{task1, task2}, nil
+				},
+				completeCycleTasksFn: func(context.Context, uuid.UUID, time.Time) error {
+					return nil
+				},
+				updateTasksStatusFn: func(context.Context, uuid.UUID, []uuid.UUID, blocktasks.BlockTaskStatus, *time.Time) error {
+					return nil
+				},
+				getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+					return []blocktasks.BlockTask{
+						{ID: task1, SprintBlockID: blockID, Status: blocktasks.TaskDone},
+						{ID: task2, SprintBlockID: blockID, Status: blocktasks.TaskDone},
+					}, nil
+				},
+				updateBlockStatusFn: func(_ context.Context, gotBlockID uuid.UUID, status sprintblocks.SprintBlocksStatus, _, completedAt *time.Time) error {
+					if gotBlockID != blockID || status != sprintblocks.Finished || completedAt == nil || !completedAt.Equal(stopAt) {
+						t.Fatal("unexpected UpdateBlockStatus call")
+					}
+					blockFinished = true
+					return nil
+				},
+			}
+			repo := &fakeStudyCycleRepository{tx: tx}
+			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+			if _, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+				t.Fatalf("expected stop to succeed, got %v", err)
+			}
+			if !blockFinished || !repo.committed {
+				t.Fatal("expected block to be marked finished and transaction committed")
+			}
+		})
+	})
+
+	t.Run("rolls back when a dependent operation fails", func(t *testing.T) {
+		cycleID := uuid.New()
+		blockID := uuid.New()
+		task1 := uuid.New()
+		dependentErr := errors.New("failed to update block tasks")
+
+		tx := &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{
+					ID:            cycleID,
+					SprintBlockID: blockID,
+					ExecutionMode: ExecutionModeSingleTask,
+					Status:        StudyCycleInProgress,
+					StartedAt:     startedAt,
+					RunningSince:  &runningSince,
+				}, nil
+			},
+			stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status}, nil
+			},
+			getCycleTaskIDsFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+				return []uuid.UUID{task1}, nil
+			},
+			completeCycleTasksFn: func(context.Context, uuid.UUID, time.Time) error {
+				return nil
+			},
+			updateTasksStatusFn: func(context.Context, uuid.UUID, []uuid.UUID, blocktasks.BlockTaskStatus, *time.Time) error {
+				return dependentErr
+			},
+		}
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
+
+		_, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		if !errors.Is(err, dependentErr) {
+			t.Fatalf("expected %v, got %v", dependentErr, err)
+		}
+		if !repo.rolledBack || repo.committed {
+			t.Fatal("expected transaction to roll back when dependent operation fails")
+		}
+	})
+}

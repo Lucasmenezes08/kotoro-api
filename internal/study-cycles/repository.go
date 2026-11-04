@@ -386,23 +386,114 @@ func (t *studyCycleTxRepository) UpdateBlockStatus(ctx context.Context, blockID 
 }
 
 func (t *studyCycleTxRepository) UpdateTasksStatus(ctx context.Context, blockID uuid.UUID, taskIDs []uuid.UUID, status blocktasks.BlockTaskStatus, completedAt *time.Time) error {
-	return errors.New("not implemented")
+	query := `
+		UPDATE block_tasks
+		SET
+			status = $3::block_task_status,
+			completed_at = COALESCE($4::timestamptz, completed_at),
+			updated_at = COALESCE($4::timestamptz, now())
+		WHERE sprint_block_id = $1
+		  AND id = $2
+		  AND deleted_at IS NULL
+	`
+	for _, taskID := range taskIDs {
+		result, err := t.tx.ExecContext(ctx, query, blockID, taskID, status, completedAt)
+		if err != nil {
+			return fmt.Errorf("update block task status: %w", err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("get updated block task rows count: %w", err)
+		}
+		if rows == 0 {
+			return blocktasks.ErrBlockTaskNotFound
+		}
+	}
+	return nil
 }
 
 func (t *studyCycleTxRepository) LockCycleByID(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error) {
-	return nil, errors.New("not implemented")
+	var cycle StudyCycle
+	query := `SELECT ` + studyCycleColumns + ` FROM study_cycles WHERE id = $1 FOR UPDATE`
+	err := t.tx.GetContext(ctx, &cycle, query, cycleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrStudyCycleNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock study cycle by id: %w", err)
+	}
+	return &cycle, nil
 }
 
 func (t *studyCycleTxRepository) GetCycleTaskIDs(ctx context.Context, cycleID uuid.UUID) ([]uuid.UUID, error) {
-	return nil, errors.New("not implemented")
+	taskIDs := make([]uuid.UUID, 0)
+	query := `
+		SELECT block_task_id
+		FROM study_cycle_tasks
+		WHERE study_cycle_id = $1
+		ORDER BY created_at ASC, block_task_id ASC
+	`
+	if err := t.tx.SelectContext(ctx, &taskIDs, query, cycleID); err != nil {
+		return nil, fmt.Errorf("get study cycle task ids: %w", err)
+	}
+	return taskIDs, nil
 }
 
 func (t *studyCycleTxRepository) CompleteCycleTasks(ctx context.Context, cycleID uuid.UUID, completedAt time.Time) error {
-	return errors.New("not implemented")
+	query := `
+		UPDATE study_cycle_tasks
+		SET completed_at = $2::timestamptz
+		WHERE study_cycle_id = $1
+	`
+	if _, err := t.tx.ExecContext(ctx, query, cycleID, completedAt); err != nil {
+		return fmt.Errorf("complete study cycle tasks: %w", err)
+	}
+	return nil
 }
 
 func (t *studyCycleTxRepository) StopCycleConditional(ctx context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
-	return nil, errors.New("not implemented")
+	var cycle StudyCycle
+	query := `
+		UPDATE study_cycles
+		SET
+			status = $2::status,
+			running_since = NULL,
+			ended_at = $3::timestamptz,
+			elapsed_seconds = $4,
+			stop_reason = $5::cycle_stop_reason,
+			updated_at = $3::timestamptz
+		WHERE id = $1
+		  AND status = $6::status
+		RETURNING ` + studyCycleColumns
+
+	err := t.tx.GetContext(
+		ctx,
+		&cycle,
+		query,
+		input.ID,
+		input.Status,
+		input.EndedAt,
+		input.ElapsedSeconds,
+		input.StopReason,
+		input.ExpectedStatus,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := t.LockCycleByID(ctx, input.ID)
+		switch {
+		case errors.Is(getErr, ErrStudyCycleNotFound):
+			return nil, ErrStudyCycleNotFound
+		case getErr != nil:
+			return nil, fmt.Errorf("check study cycle after stop: %w", getErr)
+		case existing.IsTerminal():
+			return nil, ErrStudyCycleAlreadyStopped
+		default:
+			return nil, ErrStudyCycleInvalidTransition
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stop study cycle: %w", err)
+	}
+	return &cycle, nil
 }
 
 func translateStudyCycleConstraintError(err error, operation string) error {
