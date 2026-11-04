@@ -54,6 +54,7 @@ func TestRoutes_AuthProtection(t *testing.T) {
 			{http.MethodPost, "/sprints"},
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks"},
 			{http.MethodPost, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks"},
+			{http.MethodPut, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/canvas-layout"},
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/tasks"},
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/study-cycles"},
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/study-cycles/active"},

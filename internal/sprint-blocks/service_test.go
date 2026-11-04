@@ -16,8 +16,9 @@ type fakeBlockRepository struct {
 	getByIDFn        func(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error)
 	updateFn         func(context.Context, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
 	deleteFn         func(context.Context, uuid.UUID, uuid.UUID) error
-	reorderFn        func(context.Context, uuid.UUID, []uuid.UUID) error
-	existsSubjectFn  func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error)
+	reorderFn            func(context.Context, uuid.UUID, []uuid.UUID) error
+	updateCanvasLayoutFn func(context.Context, uuid.UUID, []CanvasBlockLayoutItem) error
+	existsSubjectFn      func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error)
 	existsPositionFn func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error)
 }
 
@@ -56,6 +57,12 @@ func (f *fakeBlockRepository) Reorder(ctx context.Context, sprintID uuid.UUID, i
 		panic("unexpected Reorder")
 	}
 	return f.reorderFn(ctx, sprintID, ids)
+}
+func (f *fakeBlockRepository) UpdateCanvasLayout(ctx context.Context, sprintID uuid.UUID, items []CanvasBlockLayoutItem) error {
+	if f.updateCanvasLayoutFn != nil {
+		return f.updateCanvasLayoutFn(ctx, sprintID, items)
+	}
+	return nil
 }
 func (f *fakeBlockRepository) ExistsBySubjectID(ctx context.Context, sprintID, subjectID uuid.UUID, exclude *uuid.UUID) (bool, error) {
 	if f.existsSubjectFn == nil {
@@ -445,6 +452,78 @@ func TestSprintBlockServiceDeleteAndReorder(t *testing.T) {
 		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: uuid.New(), Position: 1})
 		if !errors.Is(err, subject.ErrSubjectNotFound) {
 			t.Fatalf("expected ErrSubjectNotFound, got %v", err)
+		}
+	})
+	t.Run("UpdateCanvasLayout persists layout atomically", func(t *testing.T) {
+		block1 := uuid.New()
+		block2 := uuid.New()
+		called := false
+		repo := &fakeBlockRepository{
+			getAllFn: func(context.Context, uuid.UUID) ([]SprintBlock, error) {
+				return []SprintBlock{
+					{ID: block1, Position: 1, Status: Pending},
+					{ID: block2, Position: 2, Status: Pending},
+				}, nil
+			},
+			updateCanvasLayoutFn: func(ctx context.Context, sid uuid.UUID, items []CanvasBlockLayoutItem) error {
+				called = true
+				if len(items) != 2 || items[0].X != 100.5 || items[1].Y != 200.0 {
+					t.Fatalf("unexpected canvas layout items: %#v", items)
+				}
+				return nil
+			},
+		}
+		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
+		err := service.UpdateCanvasLayout(context.Background(), defaultTestUserID, sprintID, UpdateCanvasLayoutInput{
+			Blocks: []CanvasBlockLayoutItem{
+				{ID: block1, Position: 2, X: 100.5, Y: 50.0},
+				{ID: block2, Position: 1, X: 300.0, Y: 200.0},
+			},
+		})
+		if err != nil || !called {
+			t.Fatalf("expected successful canvas layout update, got %v", err)
+		}
+	})
+	t.Run("UpdateCanvasLayout locks positions of non-pending blocks in in_progress sprint", func(t *testing.T) {
+		block1 := uuid.New()
+		block2 := uuid.New()
+		inProgressReader := fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		repo := &fakeBlockRepository{
+			getAllFn: func(context.Context, uuid.UUID) ([]SprintBlock, error) {
+				return []SprintBlock{
+					{ID: block1, Position: 1, Status: InProgress},
+					{ID: block2, Position: 2, Status: Pending},
+				}, nil
+			},
+		}
+		service := NewSprintBlockService(repo, inProgressReader, existingSubjectReader())
+		// Trying to change position of block1 (which is InProgress) should fail
+		err := service.UpdateCanvasLayout(context.Background(), defaultTestUserID, sprintID, UpdateCanvasLayoutInput{
+			Blocks: []CanvasBlockLayoutItem{
+				{ID: block1, Position: 2, X: 100.0, Y: 100.0},
+				{ID: block2, Position: 1, X: 200.0, Y: 200.0},
+			},
+		})
+		if !errors.Is(err, ErrInvalidSprintBlockOrder) {
+			t.Fatalf("expected ErrInvalidSprintBlockOrder when moving in-progress block, got %v", err)
+		}
+
+		// Updating x, y of block1 while keeping position 1 should succeed
+		called := false
+		repo.updateCanvasLayoutFn = func(ctx context.Context, sid uuid.UUID, items []CanvasBlockLayoutItem) error {
+			called = true
+			return nil
+		}
+		err = service.UpdateCanvasLayout(context.Background(), defaultTestUserID, sprintID, UpdateCanvasLayoutInput{
+			Blocks: []CanvasBlockLayoutItem{
+				{ID: block1, Position: 1, X: 500.0, Y: 500.0},
+				{ID: block2, Position: 2, X: 600.0, Y: 600.0},
+			},
+		})
+		if err != nil || !called {
+			t.Fatalf("expected successful canvas coordinate update preserving position, got %v", err)
 		}
 	})
 }

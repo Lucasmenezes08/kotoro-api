@@ -16,17 +16,32 @@ import (
 type SprintBlockHandler struct{ service SprintBlockServiceContract }
 
 type createSprintBlockRequest struct {
-	SubjectID        string  `json:"subject_id"`
-	Title            *string `json:"title"`
-	Position         int     `json:"position"`
-	EstimatedSeconds *int    `json:"estimated_seconds"`
+	SubjectID        string   `json:"subject_id"`
+	Title            *string  `json:"title"`
+	Position         int      `json:"position"`
+	X                *float64 `json:"x"`
+	Y                *float64 `json:"y"`
+	EstimatedSeconds *int     `json:"estimated_seconds"`
 }
 
 type updateSprintBlockRequest struct {
-	SubjectID        *string `json:"subject_id"`
-	Title            *string `json:"title"`
-	Position         *int    `json:"position"`
-	EstimatedSeconds *int    `json:"estimated_seconds"`
+	SubjectID        *string  `json:"subject_id"`
+	Title            *string  `json:"title"`
+	Position         *int     `json:"position"`
+	X                *float64 `json:"x"`
+	Y                *float64 `json:"y"`
+	EstimatedSeconds *int     `json:"estimated_seconds"`
+}
+
+type canvasBlockLayoutRequest struct {
+	ID       string  `json:"id"`
+	Position int     `json:"position"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+}
+
+type updateCanvasLayoutRequest struct {
+	Blocks []canvasBlockLayoutRequest `json:"blocks"`
 }
 
 type reorderSprintBlocksRequest struct {
@@ -61,7 +76,7 @@ func (h *SprintBlockHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	block, err := h.service.Create(r.Context(), userID, sprintID, CreateSprintBlockInput{
-		SubjectID: subjectID, Title: req.Title, Position: req.Position, EstimatedSeconds: req.EstimatedSeconds,
+		SubjectID: subjectID, Title: req.Title, Position: req.Position, X: req.X, Y: req.Y, EstimatedSeconds: req.EstimatedSeconds,
 	})
 	if err != nil {
 		h.writeError(w, err, "create sprint block")
@@ -134,7 +149,7 @@ func (h *SprintBlockHandler) Update(w http.ResponseWriter, r *http.Request) {
 		subjectID = &parsed
 	}
 	block, err := h.service.Update(r.Context(), userID, sprintID, blockID, SprintBlockUpdateModel{
-		SubjectID: subjectID, Title: req.Title, Position: req.Position, EstimatedSeconds: req.EstimatedSeconds,
+		SubjectID: subjectID, Title: req.Title, Position: req.Position, X: req.X, Y: req.Y, EstimatedSeconds: req.EstimatedSeconds,
 	})
 	if err != nil {
 		h.writeError(w, err, "update sprint block")
@@ -185,6 +200,41 @@ func (h *SprintBlockHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.service.Reorder(r.Context(), userID, sprintID, ids); err != nil {
 		h.writeError(w, err, "reorder sprint blocks")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SprintBlockHandler) UpdateCanvasLayout(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	sprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req updateCanvasLayoutRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	items := make([]CanvasBlockLayoutItem, 0, len(req.Blocks))
+	for _, it := range req.Blocks {
+		id, err := uuid.Parse(it.ID)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid block id"})
+			return
+		}
+		items = append(items, CanvasBlockLayoutItem{
+			ID:       id,
+			Position: it.Position,
+			X:        it.X,
+			Y:        it.Y,
+		})
+	}
+	if err := h.service.UpdateCanvasLayout(r.Context(), userID, sprintID, UpdateCanvasLayoutInput{Blocks: items}); err != nil {
+		h.writeError(w, err, "update canvas layout")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

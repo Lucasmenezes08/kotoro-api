@@ -43,6 +43,7 @@ type SprintBlockServiceContract interface {
 	Update(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	Reorder(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
+	UpdateCanvasLayout(context.Context, uuid.UUID, uuid.UUID, UpdateCanvasLayoutInput) error
 }
 
 type SprintBlockService struct {
@@ -78,9 +79,16 @@ func (s *SprintBlockService) Create(ctx context.Context, userID, sprintID uuid.U
 	if err := s.checkPositionConflict(ctx, sprintID, input.Position, nil); err != nil {
 		return nil, err
 	}
+	var xVal, yVal float64
+	if input.X != nil {
+		xVal = *input.X
+	}
+	if input.Y != nil {
+		yVal = *input.Y
+	}
 	block, err := s.repository.Create(ctx, CreateSprintBlockModel{
 		SprintID: sprintID, SubjectID: input.SubjectID, Title: title,
-		Position: input.Position, Status: Pending, EstimatedSeconds: input.EstimatedSeconds,
+		Position: input.Position, X: xVal, Y: yVal, Status: Pending, EstimatedSeconds: input.EstimatedSeconds,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sprint block: %w", err)
@@ -225,6 +233,52 @@ func (s *SprintBlockService) Reorder(ctx context.Context, userID, sprintID uuid.
 		return fmt.Errorf("reorder sprint blocks: %w", err)
 	}
 	return nil
+}
+
+func (s *SprintBlockService) UpdateCanvasLayout(ctx context.Context, userID, sprintID uuid.UUID, input UpdateCanvasLayoutInput) error {
+	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
+	if err != nil {
+		return err
+	}
+	if len(input.Blocks) == 0 {
+		return ErrInvalidSprintBlockOrder
+	}
+	blocks, err := s.repository.GetAllBySprintID(ctx, sprintID)
+	if err != nil {
+		return fmt.Errorf("get sprint blocks for canvas layout: %w", err)
+	}
+	if len(blocks) != len(input.Blocks) {
+		return ErrInvalidSprintBlockOrder
+	}
+	expected := make(map[uuid.UUID]SprintBlock, len(blocks))
+	for _, block := range blocks {
+		expected[block.ID] = block
+	}
+	seen := make(map[uuid.UUID]struct{}, len(input.Blocks))
+	seenPositions := make(map[int]struct{}, len(input.Blocks))
+	for _, it := range input.Blocks {
+		if it.Position <= 0 || it.Position > maxPostgresInteger {
+			return ErrSprintBlockPositionInvalid
+		}
+		if _, dup := seen[it.ID]; dup {
+			return ErrInvalidSprintBlockOrder
+		}
+		if _, dupPos := seenPositions[it.Position]; dupPos {
+			return ErrSprintBlockPositionConflict
+		}
+		b, exists := expected[it.ID]
+		if !exists {
+			return ErrInvalidSprintBlockOrder
+		}
+		if sp.Status == sprint.InProgress && b.Status != Pending {
+			if b.Position != it.Position {
+				return ErrInvalidSprintBlockOrder
+			}
+		}
+		seen[it.ID] = struct{}{}
+		seenPositions[it.Position] = struct{}{}
+	}
+	return s.repository.UpdateCanvasLayout(ctx, sprintID, input.Blocks)
 }
 
 func (s *SprintBlockService) requireEditableSprint(ctx context.Context, userID, sprintID uuid.UUID) (*sprint.Sprint, error) {

@@ -20,8 +20,9 @@ type fakeBlockService struct {
 	getAllFn  func(context.Context, uuid.UUID, uuid.UUID) ([]SprintBlock, error)
 	getByIDFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*SprintBlock, error)
 	updateFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
-	deleteFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
-	reorderFn func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
+	deleteFn             func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	reorderFn            func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
+	updateCanvasLayoutFn func(context.Context, uuid.UUID, uuid.UUID, UpdateCanvasLayoutInput) error
 }
 
 func (f *fakeBlockService) Create(ctx context.Context, userID, id uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
@@ -59,6 +60,12 @@ func (f *fakeBlockService) Reorder(ctx context.Context, userID, sprintID uuid.UU
 		panic("unexpected Reorder")
 	}
 	return f.reorderFn(ctx, userID, sprintID, ids)
+}
+func (f *fakeBlockService) UpdateCanvasLayout(ctx context.Context, userID, sprintID uuid.UUID, input UpdateCanvasLayoutInput) error {
+	if f.updateCanvasLayoutFn != nil {
+		return f.updateCanvasLayoutFn(ctx, userID, sprintID, input)
+	}
+	return nil
 }
 
 func blockRequest(method, target, body string, sprintID, blockID uuid.UUID) *http.Request {
@@ -197,6 +204,19 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 		NewSprintBlockHandler(service).Update(recorder, blockRequest(http.MethodPatch, "/", `{"title":"updated"}`, sprintID, blockID))
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"title":"updated"`) {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
+	t.Run("update canvas layout has no body and returns 204", func(t *testing.T) {
+		called := false
+		service := &fakeBlockService{updateCanvasLayoutFn: func(_ context.Context, gotUser, gotSprint uuid.UUID, input UpdateCanvasLayoutInput) error {
+			called = len(input.Blocks) == 1 && input.Blocks[0].X == 120.5
+			return nil
+		}}
+		recorder := httptest.NewRecorder()
+		request := blockRequest(http.MethodPut, "/", `{"blocks":[{"id":"`+blockID.String()+`","position":1,"x":120.5,"y":240.0}]}`, sprintID, uuid.Nil)
+		NewSprintBlockHandler(service).UpdateCanvasLayout(recorder, request)
+		if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 || !called {
+			t.Fatalf("unexpected response: %d %q, called: %v", recorder.Code, recorder.Body.String(), called)
 		}
 	})
 	t.Run("returns 401 when unauthorized", func(t *testing.T) {

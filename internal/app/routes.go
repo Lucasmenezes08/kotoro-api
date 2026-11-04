@@ -58,6 +58,7 @@ func RegisterSprintBlockRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *
 	mux.HandleFunc("POST /sprints/{sprintID}/blocks", authMiddleware.RequireAuth(handler.Create))
 	mux.HandleFunc("GET /sprints/{sprintID}/blocks", authMiddleware.RequireAuth(handler.GetAll))
 	mux.HandleFunc("PUT /sprints/{sprintID}/blocks/reorder", authMiddleware.RequireAuth(handler.Reorder))
+	mux.HandleFunc("PUT /sprints/{sprintID}/canvas-layout", authMiddleware.RequireAuth(handler.UpdateCanvasLayout))
 	mux.HandleFunc("GET /sprints/{sprintID}/blocks/{blockID}", authMiddleware.RequireAuth(handler.GetByID))
 	mux.HandleFunc("PATCH /sprints/{sprintID}/blocks/{blockID}", authMiddleware.RequireAuth(handler.Update))
 	mux.HandleFunc("DELETE /sprints/{sprintID}/blocks/{blockID}", authMiddleware.RequireAuth(handler.Delete))
