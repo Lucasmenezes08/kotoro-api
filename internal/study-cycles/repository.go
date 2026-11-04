@@ -42,6 +42,7 @@ type StudyCycleTxRepositoryContract interface {
 type StudyCycleRepositoryContract interface {
 	WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error
 	GetByID(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
+	GetSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error)
 	PauseConditional(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error)
 	ResumeConditional(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error)
 }
@@ -89,6 +90,34 @@ func (r *StudyCycleRepository) GetByID(ctx context.Context, cycleID uuid.UUID) (
 		return nil, fmt.Errorf("get study cycle by id: %w", err)
 	}
 	return &cycle, nil
+}
+
+func (r *StudyCycleRepository) GetSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
+	var sp sprint.Sprint
+	query := `
+		SELECT
+			id,
+			user_id,
+			name,
+			sprint_date,
+			status,
+			started_at,
+			completed_at,
+			created_at,
+			updated_at,
+			deleted_at
+		FROM sprints
+		WHERE id = $1 AND deleted_at IS NULL
+		LIMIT 1
+	`
+	err := r.db.GetContext(ctx, &sp, query, sprintID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sprint.ErrSprintNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get sprint by id: %w", err)
+	}
+	return &sp, nil
 }
 
 func (r *StudyCycleRepository) PauseConditional(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
@@ -185,6 +214,7 @@ func (t *studyCycleTxRepository) LockSprintByID(ctx context.Context, sprintID uu
 	query := `
 		SELECT
 			id,
+			user_id,
 			name,
 			sprint_date,
 			status,

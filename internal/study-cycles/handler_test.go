@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
@@ -17,41 +18,45 @@ import (
 )
 
 type fakeStudyCycleService struct {
-	playFn   func(ctx context.Context, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
-	pauseFn  func(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error)
-	resumeFn func(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error)
-	stopFn   func(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
+	playFn   func(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
+	pauseFn  func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	resumeFn func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	stopFn   func(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
 }
 
-func (f *fakeStudyCycleService) Play(ctx context.Context, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
+func (f *fakeStudyCycleService) Play(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
 	if f.playFn == nil {
 		panic("unexpected call to Play")
 	}
-	return f.playFn(ctx, sprintID, input)
+	return f.playFn(ctx, userID, sprintID, input)
 }
 
-func (f *fakeStudyCycleService) Pause(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
+func (f *fakeStudyCycleService) Pause(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error) {
 	if f.pauseFn == nil {
 		panic("unexpected call to Pause")
 	}
-	return f.pauseFn(ctx, cycleID)
+	return f.pauseFn(ctx, userID, cycleID)
 }
 
-func (f *fakeStudyCycleService) Resume(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
+func (f *fakeStudyCycleService) Resume(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error) {
 	if f.resumeFn == nil {
 		panic("unexpected call to Resume")
 	}
-	return f.resumeFn(ctx, cycleID)
+	return f.resumeFn(ctx, userID, cycleID)
 }
 
-func (f *fakeStudyCycleService) Stop(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
+func (f *fakeStudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
 	if f.stopFn == nil {
 		panic("unexpected call to Stop")
 	}
-	return f.stopFn(ctx, cycleID, input)
+	return f.stopFn(ctx, userID, cycleID, input)
 }
 
 var _ StudyCycleServiceContract = (*fakeStudyCycleService)(nil)
+
+func authReq(r *http.Request) *http.Request {
+	return r.WithContext(auth.WithUserID(r.Context(), defaultTestUserID))
+}
 
 func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 	serverNow := time.Date(2026, 11, 4, 15, 0, 0, 0, time.UTC)
@@ -63,8 +68,8 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 
 	t.Run("Play returns 201 Created and authoritative cycle state", func(t *testing.T) {
 		service := &fakeStudyCycleService{
-			playFn: func(_ context.Context, gotSprint uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
-				if gotSprint != sprintID || input.ExecutionMode != ExecutionModeSingleTask || input.TimerType != TimerTypeTimed {
+			playFn: func(_ context.Context, gotUser, gotSprint uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
+				if gotUser != defaultTestUserID || gotSprint != sprintID || input.ExecutionMode != ExecutionModeSingleTask || input.TimerType != TimerTypeTimed {
 					t.Fatalf("unexpected play input: sprint=%v input=%#v", gotSprint, input)
 				}
 				if input.PlannedDurationSeconds == nil || *input.PlannedDurationSeconds != plannedDuration {
@@ -91,7 +96,7 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 
 		handler := NewStudyCycleHandlerWithClock(service, func() time.Time { return serverNow })
 		body := `{"execution_mode":"tarefa_individual","timer_type":"temporizado","planned_duration_seconds":1500,"block_task_ids":["` + taskID.String() + `"]}`
-		req := httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(body))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(body)))
 		req.SetPathValue("sprintID", sprintID.String())
 		rec := httptest.NewRecorder()
 
@@ -113,8 +118,8 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 	t.Run("Pause returns 200 OK", func(t *testing.T) {
 		pausedAt := serverNow.Add(5 * time.Minute)
 		service := &fakeStudyCycleService{
-			pauseFn: func(_ context.Context, gotCycle uuid.UUID) (StudyCycle, error) {
-				if gotCycle != cycleID {
+			pauseFn: func(_ context.Context, gotUser, gotCycle uuid.UUID) (StudyCycle, error) {
+				if gotUser != defaultTestUserID || gotCycle != cycleID {
 					t.Fatalf("expected cycle %v, got %v", cycleID, gotCycle)
 				}
 				return StudyCycle{
@@ -133,7 +138,7 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 		}
 
 		handler := NewStudyCycleHandlerWithClock(service, func() time.Time { return pausedAt })
-		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/pause", nil)
+		req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/pause", nil))
 		req.SetPathValue("cycleID", cycleID.String())
 		rec := httptest.NewRecorder()
 
@@ -154,8 +159,8 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 	t.Run("Resume returns 200 OK", func(t *testing.T) {
 		resumedAt := serverNow.Add(10 * time.Minute)
 		service := &fakeStudyCycleService{
-			resumeFn: func(_ context.Context, gotCycle uuid.UUID) (StudyCycle, error) {
-				if gotCycle != cycleID {
+			resumeFn: func(_ context.Context, gotUser, gotCycle uuid.UUID) (StudyCycle, error) {
+				if gotUser != defaultTestUserID || gotCycle != cycleID {
 					t.Fatalf("expected cycle %v, got %v", cycleID, gotCycle)
 				}
 				return StudyCycle{
@@ -174,7 +179,7 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 		}
 
 		handler := NewStudyCycleHandlerWithClock(service, func() time.Time { return resumedAt })
-		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/resume", nil)
+		req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/resume", nil))
 		req.SetPathValue("cycleID", cycleID.String())
 		rec := httptest.NewRecorder()
 
@@ -196,8 +201,8 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 		endedAt := serverNow.Add(15 * time.Minute)
 		reason := CycleStopReasonCompleted
 		service := &fakeStudyCycleService{
-			stopFn: func(_ context.Context, gotCycle uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
-				if gotCycle != cycleID || input.Reason != CycleStopReasonCompleted {
+			stopFn: func(_ context.Context, gotUser, gotCycle uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
+				if gotUser != defaultTestUserID || gotCycle != cycleID || input.Reason != CycleStopReasonCompleted {
 					t.Fatalf("unexpected stop args: %v %#v", gotCycle, input)
 				}
 				return StudyCycle{
@@ -217,7 +222,7 @@ func TestStudyCycleHandlerSuccessStatusAndResponseBody(t *testing.T) {
 		}
 
 		handler := NewStudyCycleHandlerWithClock(service, func() time.Time { return endedAt })
-		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(`{"reason":"concluido"}`))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(`{"reason":"concluido"}`)))
 		req.SetPathValue("cycleID", cycleID.String())
 		rec := httptest.NewRecorder()
 
@@ -240,7 +245,7 @@ func TestStudyCycleHandlerInvalidUUIDs(t *testing.T) {
 	handler := NewStudyCycleHandler(&fakeStudyCycleService{})
 
 	t.Run("invalid sprintID on Play", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/sprints/invalid/study-cycles/play", strings.NewReader(`{"execution_mode":"bloco_materia","timer_type":"cronometro_livre"}`))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/sprints/invalid/study-cycles/play", strings.NewReader(`{"execution_mode":"bloco_materia","timer_type":"cronometro_livre"}`)))
 		req.SetPathValue("sprintID", "invalid")
 		rec := httptest.NewRecorder()
 		handler.Play(rec, req)
@@ -251,7 +256,7 @@ func TestStudyCycleHandlerInvalidUUIDs(t *testing.T) {
 
 	t.Run("invalid block_task_id on Play", func(t *testing.T) {
 		sprintID := uuid.New()
-		req := httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(`{"execution_mode":"tarefa_individual","timer_type":"cronometro_livre","block_task_ids":["not-a-uuid"]}`))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(`{"execution_mode":"tarefa_individual","timer_type":"cronometro_livre","block_task_ids":["not-a-uuid"]}`)))
 		req.SetPathValue("sprintID", sprintID.String())
 		rec := httptest.NewRecorder()
 		handler.Play(rec, req)
@@ -269,7 +274,7 @@ func TestStudyCycleHandlerInvalidUUIDs(t *testing.T) {
 		{"Stop", handler.Stop},
 	} {
 		t.Run("invalid cycleID on "+tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/study-cycles/invalid", strings.NewReader(`{"reason":"concluido"}`))
+			req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/invalid", strings.NewReader(`{"reason":"concluido"}`)))
 			req.SetPathValue("cycleID", "invalid")
 			rec := httptest.NewRecorder()
 			tc.call(rec, req)
@@ -297,7 +302,7 @@ func TestStudyCycleHandlerInvalidJSONAndUnknownFields(t *testing.T) {
 	}
 
 	for _, body := range playBodies {
-		req := httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(body))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/sprints/"+sprintID.String()+"/study-cycles/play", strings.NewReader(body)))
 		req.SetPathValue("sprintID", sprintID.String())
 		rec := httptest.NewRecorder()
 		handler.Play(rec, req)
@@ -312,7 +317,7 @@ func TestStudyCycleHandlerInvalidJSONAndUnknownFields(t *testing.T) {
 		`{"reason":"concluido","elapsed_seconds":500}`,
 	}
 	for _, body := range stopBodies {
-		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(body))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(body)))
 		req.SetPathValue("cycleID", cycleID.String())
 		rec := httptest.NewRecorder()
 		handler.Stop(rec, req)
@@ -322,7 +327,7 @@ func TestStudyCycleHandlerInvalidJSONAndUnknownFields(t *testing.T) {
 	}
 
 	for _, body := range []string{`{`, `{"status":"pausado"}`} {
-		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/pause", strings.NewReader(body))
+		req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/pause", strings.NewReader(body)))
 		req.SetPathValue("cycleID", cycleID.String())
 		rec := httptest.NewRecorder()
 		handler.Pause(rec, req)
@@ -359,13 +364,13 @@ func TestStudyCycleHandlerErrorMappings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			service := &fakeStudyCycleService{
-				stopFn: func(context.Context, uuid.UUID, StopStudyCycleInput) (StudyCycle, error) {
+				stopFn: func(context.Context, uuid.UUID, uuid.UUID, StopStudyCycleInput) (StudyCycle, error) {
 					return StudyCycle{}, tc.err
 				},
 			}
 			handler := NewStudyCycleHandler(service)
 			cycleID := uuid.New()
-			req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(`{"reason":"concluido"}`))
+			req := authReq(httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(`{"reason":"concluido"}`)))
 			req.SetPathValue("cycleID", cycleID.String())
 			rec := httptest.NewRecorder()
 
@@ -379,4 +384,16 @@ func TestStudyCycleHandlerErrorMappings(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("returns 401 when unauthenticated", func(t *testing.T) {
+		handler := NewStudyCycleHandler(&fakeStudyCycleService{})
+		cycleID := uuid.New()
+		req := httptest.NewRequest(http.MethodPost, "/study-cycles/"+cycleID.String()+"/stop", strings.NewReader(`{"reason":"concluido"}`))
+		req.SetPathValue("cycleID", cycleID.String())
+		rec := httptest.NewRecorder()
+		handler.Stop(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
 }

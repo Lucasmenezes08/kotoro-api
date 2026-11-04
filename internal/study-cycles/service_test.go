@@ -28,11 +28,17 @@ type fakeStudyCycleTxRepository struct {
 	stopCycleConditionalFn    func(ctx context.Context, input StopStudyCycleModel) (*StudyCycle, error)
 }
 
+var defaultTestUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
 func (f *fakeStudyCycleTxRepository) LockSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
-	if f.lockSprintByIDFn == nil {
-		panic("unexpected call to LockSprintByID")
+	if f.lockSprintByIDFn != nil {
+		sp, err := f.lockSprintByIDFn(ctx, sprintID)
+		if sp != nil && sp.UserID == uuid.Nil {
+			sp.UserID = defaultTestUserID
+		}
+		return sp, err
 	}
-	return f.lockSprintByIDFn(ctx, sprintID)
+	return &sprint.Sprint{ID: sprintID, UserID: defaultTestUserID, Status: sprint.InProgress}, nil
 }
 
 func (f *fakeStudyCycleTxRepository) HasActiveCycleBySprintID(ctx context.Context, sprintID uuid.UUID) (bool, error) {
@@ -123,10 +129,18 @@ type fakeStudyCycleRepository struct {
 	tx                  *fakeStudyCycleTxRepository
 	withinTransactionFn func(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error
 	getByIDFn           func(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
+	getSprintByIDFn     func(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error)
 	pauseConditionalFn  func(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error)
 	resumeConditionalFn func(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error)
 	committed           bool
 	rolledBack          bool
+}
+
+func (f *fakeStudyCycleRepository) GetSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
+	if f.getSprintByIDFn != nil {
+		return f.getSprintByIDFn(ctx, sprintID)
+	}
+	return &sprint.Sprint{ID: sprintID, UserID: defaultTestUserID, Status: sprint.InProgress}, nil
 }
 
 func (f *fakeStudyCycleRepository) WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error {
@@ -229,7 +243,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-		cycle, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -254,7 +268,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-			_, err := service.Play(context.Background(), uuid.New(), PlayStudyCycleInput{
+			_, err := service.Play(context.Background(), defaultTestUserID, uuid.New(), PlayStudyCycleInput{
 				ExecutionMode: ExecutionModeSubjectBlock,
 				TimerType:     TimerTypeFree,
 			})
@@ -285,7 +299,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-		_, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		_, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -307,7 +321,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-		_, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		_, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -349,7 +363,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-			cycle, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+			cycle, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 				ExecutionMode: ExecutionModeSubjectBlock,
 				TimerType:     TimerTypeFree,
 			})
@@ -389,7 +403,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-			cycle, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+			cycle, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 				ExecutionMode: ExecutionModeSubjectBlock,
 				TimerType:     TimerTypeFree,
 			})
@@ -409,14 +423,14 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		invalidDuration := 0
 
 		service := NewStudyCycleService(&fakeStudyCycleRepository{})
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeTimed,
 		}); !errors.Is(err, ErrInvalidTimerConfiguration) {
 			t.Fatalf("expected ErrInvalidTimerConfiguration for timed without duration, got %v", err)
 		}
 
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode:          ExecutionModeSubjectBlock,
 			TimerType:              TimerTypeTimed,
 			PlannedDurationSeconds: &invalidDuration,
@@ -424,7 +438,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			t.Fatalf("expected ErrInvalidTimerConfiguration for timed with 0 duration, got %v", err)
 		}
 
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode:          ExecutionModeSubjectBlock,
 			TimerType:              TimerTypeFree,
 			PlannedDurationSeconds: &duration,
@@ -449,7 +463,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			},
 		}
 		timedService := NewStudyCycleServiceWithClock(&fakeStudyCycleRepository{tx: tx}, func() time.Time { return fixedNow })
-		cycle, err := timedService.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle, err := timedService.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode:          ExecutionModeSubjectBlock,
 			TimerType:              TimerTypeTimed,
 			PlannedDurationSeconds: &duration,
@@ -499,7 +513,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 
 		// Valid individual task
 		service := NewStudyCycleServiceWithClock(&fakeStudyCycleRepository{tx: makeTx()}, func() time.Time { return fixedNow })
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSingleTask,
 			TimerType:     TimerTypeFree,
 			BlockTaskIDs:  []uuid.UUID{task1},
@@ -512,7 +526,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 
 		// Valid multiple tasks
 		service = NewStudyCycleServiceWithClock(&fakeStudyCycleRepository{tx: makeTx()}, func() time.Time { return fixedNow })
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeMultipleTasks,
 			TimerType:     TimerTypeFree,
 			BlockTaskIDs:  []uuid.UUID{task1, task2},
@@ -535,7 +549,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 			if len(invalidIDs) > 1 {
 				mode = ExecutionModeMultipleTasks
 			}
-			if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+			if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 				ExecutionMode: mode,
 				TimerType:     TimerTypeFree,
 				BlockTaskIDs:  invalidIDs,
@@ -555,7 +569,7 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
-		_, err := service.Play(context.Background(), uuid.New(), PlayStudyCycleInput{
+		_, err := service.Play(context.Background(), defaultTestUserID, uuid.New(), PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -624,7 +638,7 @@ func TestStudyCycleServicePause(t *testing.T) {
 		}
 
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
-		cycle, err := service.Pause(context.Background(), cycleID)
+		cycle, err := service.Pause(context.Background(), defaultTestUserID, cycleID)
 		if err != nil {
 			t.Fatalf("expected pause to succeed, got %v", err)
 		}
@@ -641,7 +655,7 @@ func TestStudyCycleServicePause(t *testing.T) {
 			},
 		}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
-		_, err := service.Pause(context.Background(), cycleID)
+		_, err := service.Pause(context.Background(), defaultTestUserID, cycleID)
 		if !errors.Is(err, ErrStudyCycleNotRunning) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
 			t.Fatalf("expected ErrStudyCycleNotRunning, got %v", err)
 		}
@@ -656,7 +670,7 @@ func TestStudyCycleServicePause(t *testing.T) {
 				},
 			}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
-			_, err := service.Pause(context.Background(), cycleID)
+			_, err := service.Pause(context.Background(), defaultTestUserID, cycleID)
 			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleNotRunning) {
 				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped/ErrStudyCycleNotRunning, got %v", status, err)
 			}
@@ -670,7 +684,7 @@ func TestStudyCycleServicePause(t *testing.T) {
 			},
 		}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
-		_, err := service.Pause(context.Background(), uuid.New())
+		_, err := service.Pause(context.Background(), defaultTestUserID, uuid.New())
 		if !errors.Is(err, ErrStudyCycleNotFound) {
 			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
 		}
@@ -730,7 +744,7 @@ func TestStudyCycleServiceResume(t *testing.T) {
 		}
 
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
-		cycle, err := service.Resume(context.Background(), cycleID)
+		cycle, err := service.Resume(context.Background(), defaultTestUserID, cycleID)
 		if err != nil {
 			t.Fatalf("expected resume to succeed, got %v", err)
 		}
@@ -747,7 +761,7 @@ func TestStudyCycleServiceResume(t *testing.T) {
 			},
 		}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
-		_, err := service.Resume(context.Background(), cycleID)
+		_, err := service.Resume(context.Background(), defaultTestUserID, cycleID)
 		if !errors.Is(err, ErrStudyCycleNotPaused) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
 			t.Fatalf("expected ErrStudyCycleNotPaused, got %v", err)
 		}
@@ -762,7 +776,7 @@ func TestStudyCycleServiceResume(t *testing.T) {
 				},
 			}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
-			_, err := service.Resume(context.Background(), cycleID)
+			_, err := service.Resume(context.Background(), defaultTestUserID, cycleID)
 			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleNotPaused) {
 				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped/ErrStudyCycleNotPaused, got %v", status, err)
 			}
@@ -776,7 +790,7 @@ func TestStudyCycleServiceResume(t *testing.T) {
 			},
 		}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
-		_, err := service.Resume(context.Background(), uuid.New())
+		_, err := service.Resume(context.Background(), defaultTestUserID, uuid.New())
 		if !errors.Is(err, ErrStudyCycleNotFound) {
 			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
 		}
@@ -843,7 +857,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-		cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		cycle, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if err != nil {
 			t.Fatalf("expected stop to succeed, got %v", err)
 		}
@@ -898,7 +912,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-		cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		cycle, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if err != nil {
 			t.Fatalf("expected stop to succeed, got %v", err)
 		}
@@ -950,7 +964,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-			cycle, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: tc.reason})
+			cycle, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: tc.reason})
 			if err != nil {
 				t.Fatalf("for reason %q unexpected error: %v", tc.reason, err)
 			}
@@ -962,7 +976,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 
 	t.Run("rejects an already terminal cycle and invalid stop reasons", func(t *testing.T) {
 		service := NewStudyCycleService(&fakeStudyCycleRepository{})
-		if _, err := service.Stop(context.Background(), uuid.New(), StopStudyCycleInput{Reason: CycleStopReason("pausado")}); !errors.Is(err, ErrInvalidStopReason) {
+		if _, err := service.Stop(context.Background(), defaultTestUserID, uuid.New(), StopStudyCycleInput{Reason: CycleStopReason("pausado")}); !errors.Is(err, ErrInvalidStopReason) {
 			t.Fatalf("expected ErrInvalidStopReason, got %v", err)
 		}
 
@@ -975,7 +989,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			svc := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-			_, err := svc.Stop(context.Background(), uuid.New(), StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+			_, err := svc.Stop(context.Background(), defaultTestUserID, uuid.New(), StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
 				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped, got %v", status, err)
 			}
@@ -1041,7 +1055,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-			if _, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+			if _, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
 				t.Fatalf("expected stop to succeed, got %v", err)
 			}
 			if !cycleTasksCompleted || !tasksStatusUpdated {
@@ -1095,7 +1109,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-			if _, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+			if _, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
 				t.Fatalf("expected stop to succeed, got %v", err)
 			}
 			if !blockFinished || !repo.committed {
@@ -1137,12 +1151,80 @@ func TestStudyCycleServiceStop(t *testing.T) {
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
-		_, err := service.Stop(context.Background(), cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		_, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if !errors.Is(err, dependentErr) {
 			t.Fatalf("expected %v, got %v", dependentErr, err)
 		}
 		if !repo.rolledBack || repo.committed {
 			t.Fatal("expected transaction to roll back when dependent operation fails")
+		}
+	})
+
+	t.Run("rejects access when sprint belongs to another user", func(t *testing.T) {
+		otherUserID := uuid.MustParse("00000000-0000-0000-0000-000000000099")
+		sprintID := uuid.New()
+		cycleID := uuid.New()
+
+		// Play
+		txPlay := &fakeStudyCycleTxRepository{
+			lockSprintByIDFn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+				return &sprint.Sprint{ID: sprintID, UserID: otherUserID, Status: sprint.InProgress}, nil
+			},
+		}
+		repoPlay := &fakeStudyCycleRepository{tx: txPlay}
+		servicePlay := NewStudyCycleService(repoPlay)
+		_, err := servicePlay.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
+			ExecutionMode: ExecutionModeSubjectBlock,
+			TimerType:     TimerTypeFree,
+		})
+		if !errors.Is(err, sprint.ErrSprintNotFound) {
+			t.Fatalf("expected sprint.ErrSprintNotFound, got %v", err)
+		}
+
+		// Pause
+		repoPause := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: sprintID, Status: StudyCycleInProgress}, nil
+			},
+			getSprintByIDFn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+				return &sprint.Sprint{ID: sprintID, UserID: otherUserID}, nil
+			},
+		}
+		servicePause := NewStudyCycleService(repoPause)
+		_, err = servicePause.Pause(context.Background(), defaultTestUserID, cycleID)
+		if !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
+		}
+
+		// Resume
+		repoResume := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: sprintID, Status: StudyCyclePaused}, nil
+			},
+			getSprintByIDFn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+				return &sprint.Sprint{ID: sprintID, UserID: otherUserID}, nil
+			},
+		}
+		serviceResume := NewStudyCycleService(repoResume)
+		_, err = serviceResume.Resume(context.Background(), defaultTestUserID, cycleID)
+		if !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
+		}
+
+		// Stop
+		txStop := &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: sprintID, Status: StudyCycleInProgress}, nil
+			},
+			lockSprintByIDFn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+				return &sprint.Sprint{ID: sprintID, UserID: otherUserID}, nil
+			},
+		}
+		repoStop := &fakeStudyCycleRepository{tx: txStop}
+		serviceStop := NewStudyCycleService(repoStop)
+		_, err = serviceStop.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		if !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
 		}
 	})
 }

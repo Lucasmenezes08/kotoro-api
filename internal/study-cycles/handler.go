@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
@@ -54,6 +55,12 @@ func NewStudyCycleHandlerWithClock(service StudyCycleServiceContract, clock func
 }
 
 func (h *StudyCycleHandler) Play(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	sprintID, ok := parseCyclePathUUID(w, r, "sprintID", "Invalid sprint id")
 	if !ok {
 		return
@@ -74,7 +81,7 @@ func (h *StudyCycleHandler) Play(w http.ResponseWriter, r *http.Request) {
 		taskIDs = append(taskIDs, id)
 	}
 
-	cycle, err := h.service.Play(r.Context(), sprintID, PlayStudyCycleInput{
+	cycle, err := h.service.Play(r.Context(), userID, sprintID, PlayStudyCycleInput{
 		ExecutionMode:          req.ExecutionMode,
 		TimerType:              req.TimerType,
 		PlannedDurationSeconds: req.PlannedDurationSeconds,
@@ -89,6 +96,12 @@ func (h *StudyCycleHandler) Play(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StudyCycleHandler) Pause(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	cycleID, ok := parseCyclePathUUID(w, r, "cycleID", "Invalid study cycle id")
 	if !ok {
 		return
@@ -97,7 +110,7 @@ func (h *StudyCycleHandler) Pause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cycle, err := h.service.Pause(r.Context(), cycleID)
+	cycle, err := h.service.Pause(r.Context(), userID, cycleID)
 	if err != nil {
 		h.writeError(w, err, "pause study cycle")
 		return
@@ -107,6 +120,12 @@ func (h *StudyCycleHandler) Pause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StudyCycleHandler) Resume(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	cycleID, ok := parseCyclePathUUID(w, r, "cycleID", "Invalid study cycle id")
 	if !ok {
 		return
@@ -115,7 +134,7 @@ func (h *StudyCycleHandler) Resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cycle, err := h.service.Resume(r.Context(), cycleID)
+	cycle, err := h.service.Resume(r.Context(), userID, cycleID)
 	if err != nil {
 		h.writeError(w, err, "resume study cycle")
 		return
@@ -125,6 +144,12 @@ func (h *StudyCycleHandler) Resume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StudyCycleHandler) Stop(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	cycleID, ok := parseCyclePathUUID(w, r, "cycleID", "Invalid study cycle id")
 	if !ok {
 		return
@@ -135,7 +160,7 @@ func (h *StudyCycleHandler) Stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cycle, err := h.service.Stop(r.Context(), cycleID, StopStudyCycleInput{
+	cycle, err := h.service.Stop(r.Context(), userID, cycleID, StopStudyCycleInput{
 		Reason: req.Reason,
 	})
 	if err != nil {

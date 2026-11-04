@@ -106,6 +106,20 @@ func (r *inMemoryConcurrentRepo) GetByID(_ context.Context, cycleID uuid.UUID) (
 	return &copied, nil
 }
 
+func (r *inMemoryConcurrentRepo) GetSprintByID(_ context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sp, ok := r.sprints[sprintID]
+	if !ok || sp.DeletedAt != nil {
+		return nil, sprint.ErrSprintNotFound
+	}
+	if sp.UserID == uuid.Nil {
+		sp.UserID = defaultTestUserID
+	}
+	copied := sp
+	return &copied, nil
+}
+
 func (r *inMemoryConcurrentRepo) PauseConditional(_ context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,6 +179,9 @@ func (tx *inMemoryTx) LockSprintByID(_ context.Context, sprintID uuid.UUID) (*sp
 	sp, ok := tx.sprints[sprintID]
 	if !ok || sp.DeletedAt != nil {
 		return nil, sprint.ErrSprintNotFound
+	}
+	if sp.UserID == uuid.Nil {
+		sp.UserID = defaultTestUserID
 	}
 	copied := sp
 	return &copied, nil
@@ -408,7 +425,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return currentTime })
 
 		// 1. Play block 1 with task 1
-		cycle1, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle1, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSingleTask,
 			TimerType:     TimerTypeFree,
 			BlockTaskIDs:  []uuid.UUID{task1ID},
@@ -425,7 +442,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 
 		// 2. Pause after 120s
 		currentTime = currentTime.Add(120 * time.Second)
-		paused1, err := service.Pause(context.Background(), cycle1.ID)
+		paused1, err := service.Pause(context.Background(), defaultTestUserID, cycle1.ID)
 		if err != nil {
 			t.Fatalf("pause cycle 1 failed: %v", err)
 		}
@@ -435,7 +452,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 
 		// 3. Resume after 300s pause (paused interval must not count)
 		currentTime = currentTime.Add(300 * time.Second)
-		resumed1, err := service.Resume(context.Background(), cycle1.ID)
+		resumed1, err := service.Resume(context.Background(), defaultTestUserID, cycle1.ID)
 		if err != nil {
 			t.Fatalf("resume cycle 1 failed: %v", err)
 		}
@@ -445,7 +462,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 
 		// 4. Stop completed after 80s more running (total elapsed = 200s)
 		currentTime = currentTime.Add(80 * time.Second)
-		stopped1, err := service.Stop(context.Background(), cycle1.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		stopped1, err := service.Stop(context.Background(), defaultTestUserID, cycle1.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if err != nil {
 			t.Fatalf("stop cycle 1 failed: %v", err)
 		}
@@ -464,7 +481,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 		block1Temp := repo.blocks[block1ID]
 		block1Temp.Status = sprintblocks.Pending
 		repo.blocks[block1ID] = block1Temp
-		if _, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		if _, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSingleTask,
 			TimerType:     TimerTypeFree,
 			BlockTaskIDs:  []uuid.UUID{task2ID},
@@ -478,7 +495,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 
 		// 6. Play cycle 2 on block 1 with task 2 and complete it -> block 1 finishes
 		currentTime = currentTime.Add(10 * time.Second)
-		cycle2, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle2, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSingleTask,
 			TimerType:     TimerTypeFree,
 			BlockTaskIDs:  []uuid.UUID{task2ID},
@@ -490,7 +507,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 			t.Fatalf("expected sequence 2 on block 1, got %#v", cycle2)
 		}
 		currentTime = currentTime.Add(60 * time.Second)
-		if _, err := service.Stop(context.Background(), cycle2.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+		if _, err := service.Stop(context.Background(), defaultTestUserID, cycle2.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
 			t.Fatalf("stop cycle 2 failed: %v", err)
 		}
 		if repo.blocks[block1ID].Status != sprintblocks.Finished {
@@ -499,7 +516,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 
 		// 7. Next Play selects block 2 with sequence 3
 		currentTime = currentTime.Add(10 * time.Second)
-		cycle3, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle3, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -515,7 +532,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 		repo := newInMemoryConcurrentRepo()
 		sprintID := uuid.New()
 		blockID := uuid.New()
-		repo.sprints[sprintID] = sprint.Sprint{ID: sprintID, Status: sprint.InProgress}
+		repo.sprints[sprintID] = sprint.Sprint{ID: sprintID, UserID: defaultTestUserID, Status: sprint.InProgress}
 		repo.blocks[blockID] = sprintblocks.SprintBlock{ID: blockID, SprintID: sprintID, Position: 1, Status: sprintblocks.Pending}
 
 		fixedNow := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
@@ -530,7 +547,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 			go func(idx int) {
 				defer wg.Done()
 				<-start
-				_, errs[idx] = service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+				_, errs[idx] = service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 					ExecutionMode: ExecutionModeSubjectBlock,
 					TimerType:     TimerTypeFree,
 				})
@@ -562,12 +579,12 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 		repo := newInMemoryConcurrentRepo()
 		sprintID := uuid.New()
 		blockID := uuid.New()
-		repo.sprints[sprintID] = sprint.Sprint{ID: sprintID, Status: sprint.InProgress}
+		repo.sprints[sprintID] = sprint.Sprint{ID: sprintID, UserID: defaultTestUserID, Status: sprint.InProgress}
 		repo.blocks[blockID] = sprintblocks.SprintBlock{ID: blockID, SprintID: sprintID, Position: 1, Status: sprintblocks.Pending}
 
 		t0 := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return t0 })
-		cycle, err := service.Play(context.Background(), sprintID, PlayStudyCycleInput{
+		cycle, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
 			ExecutionMode: ExecutionModeSubjectBlock,
 			TimerType:     TimerTypeFree,
 		})
@@ -585,7 +602,7 @@ func TestEndToEndLifecycleAndConcurrentTransitions(t *testing.T) {
 			go func(idx int) {
 				defer wg.Done()
 				<-start
-				_, errs[idx] = pauseService.Pause(context.Background(), cycle.ID)
+				_, errs[idx] = pauseService.Pause(context.Background(), defaultTestUserID, cycle.ID)
 			}(i)
 		}
 
@@ -655,15 +672,21 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 	currentNow := t0
 	service := NewStudyCycleServiceWithClock(repo, func() time.Time { return currentNow })
 
+	var testUserID uuid.UUID
+	testUserEmail := "test-" + uuid.NewString() + "@example.com"
+	if err := db.GetContext(ctx, &testUserID, `INSERT INTO users (name, email, password_hash) VALUES ('Test User', $1, 'hash') RETURNING id`, testUserEmail); err != nil {
+		t.Fatalf("insert test user: %v", err)
+	}
+
 	var subjectID uuid.UUID
 	subjectName := "Subject-" + uuid.NewString()
-	if err := db.GetContext(ctx, &subjectID, `INSERT INTO subjects (name, color) VALUES ($1, 'blue') RETURNING id`, subjectName); err != nil {
+	if err := db.GetContext(ctx, &subjectID, `INSERT INTO subjects (user_id, name, color) VALUES ($1, $2, 'blue') RETURNING id`, testUserID, subjectName); err != nil {
 		t.Fatalf("insert test subject: %v", err)
 	}
 
 	var sprintID uuid.UUID
 	sprintDate := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, int(uuid.New().ID()%10000))
-	if err := db.GetContext(ctx, &sprintID, `INSERT INTO sprints (name, sprint_date, status, started_at) VALUES ('Test Sprint', $1::date, 'in_progress', $2) RETURNING id`, sprintDate, t0); err != nil {
+	if err := db.GetContext(ctx, &sprintID, `INSERT INTO sprints (user_id, name, sprint_date, status, started_at) VALUES ($1, 'Test Sprint', $2::date, 'in_progress', $3) RETURNING id`, testUserID, sprintDate, t0); err != nil {
 		t.Fatalf("insert test sprint: %v", err)
 	}
 
@@ -676,6 +699,7 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM study_cycles WHERE sprint_id = $1`, sprintID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM sprints WHERE id = $1`, sprintID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM subjects WHERE id = $1`, subjectID)
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, testUserID)
 	})
 
 	t.Run("concurrent play requests in PostgreSQL allow exactly one active cycle", func(t *testing.T) {
@@ -689,7 +713,7 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 			go func(idx int) {
 				defer wg.Done()
 				<-start
-				cycles[idx], errs[idx] = service.Play(ctx, sprintID, PlayStudyCycleInput{
+				cycles[idx], errs[idx] = service.Play(ctx, testUserID, sprintID, PlayStudyCycleInput{
 					ExecutionMode: ExecutionModeSubjectBlock,
 					TimerType:     TimerTypeFree,
 				})
@@ -725,7 +749,7 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 			go func(idx int) {
 				defer wg.Done()
 				<-startPause
-				_, pauseErrs[idx] = service.Pause(ctx, activeCycle.ID)
+				_, pauseErrs[idx] = service.Pause(ctx, testUserID, activeCycle.ID)
 			}(i)
 		}
 		close(startPause)
@@ -749,13 +773,13 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 
 		// Resume and Stop
 		currentNow = t0.Add(120 * time.Second)
-		resumed, err := service.Resume(ctx, activeCycle.ID)
+		resumed, err := service.Resume(ctx, testUserID, activeCycle.ID)
 		if err != nil || resumed.ElapsedSeconds != 60 {
 			t.Fatalf("unexpected resume result: %#v %v", resumed, err)
 		}
 
 		currentNow = t0.Add(150 * time.Second)
-		stopped, err := service.Stop(ctx, activeCycle.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
+		stopped, err := service.Stop(ctx, testUserID, activeCycle.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if err != nil || stopped.ElapsedSeconds != 90 || stopped.Status != StudyCycleFinished {
 			t.Fatalf("unexpected stop result: %#v %v", stopped, err)
 		}

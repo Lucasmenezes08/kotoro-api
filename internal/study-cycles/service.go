@@ -2,6 +2,7 @@ package studycycles
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,10 +13,10 @@ import (
 )
 
 type StudyCycleServiceContract interface {
-	Play(ctx context.Context, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
-	Pause(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error)
-	Resume(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error)
-	Stop(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
+	Play(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
+	Pause(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	Resume(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	Stop(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
 }
 
 type StudyCycleService struct {
@@ -41,7 +42,7 @@ func NewStudyCycleServiceWithClock(repo StudyCycleRepositoryContract, clock func
 	}
 }
 
-func (s *StudyCycleService) Play(ctx context.Context, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
+func (s *StudyCycleService) Play(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
 	if err := validatePlayInput(input); err != nil {
 		return StudyCycle{}, err
 	}
@@ -51,6 +52,9 @@ func (s *StudyCycleService) Play(ctx context.Context, sprintID uuid.UUID, input 
 		sp, err := tx.LockSprintByID(ctx, sprintID)
 		if err != nil {
 			return err
+		}
+		if sp.UserID != userID {
+			return sprint.ErrSprintNotFound
 		}
 		if sp.Status != sprint.InProgress {
 			return ErrSprintNotStarted
@@ -134,10 +138,21 @@ func (s *StudyCycleService) Play(ctx context.Context, sprintID uuid.UUID, input 
 	return created, nil
 }
 
-func (s *StudyCycleService) Pause(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
+func (s *StudyCycleService) Pause(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error) {
 	existing, err := s.repo.GetByID(ctx, cycleID)
 	if err != nil {
 		return StudyCycle{}, err
+	}
+
+	sp, err := s.repo.GetSprintByID(ctx, existing.SprintID)
+	if err != nil {
+		if errors.Is(err, sprint.ErrSprintNotFound) {
+			return StudyCycle{}, ErrStudyCycleNotFound
+		}
+		return StudyCycle{}, err
+	}
+	if sp.UserID != userID {
+		return StudyCycle{}, ErrStudyCycleNotFound
 	}
 
 	now := s.now().UTC()
@@ -160,10 +175,21 @@ func (s *StudyCycleService) Pause(ctx context.Context, cycleID uuid.UUID) (Study
 	return *updated, nil
 }
 
-func (s *StudyCycleService) Resume(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
+func (s *StudyCycleService) Resume(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error) {
 	existing, err := s.repo.GetByID(ctx, cycleID)
 	if err != nil {
 		return StudyCycle{}, err
+	}
+
+	sp, err := s.repo.GetSprintByID(ctx, existing.SprintID)
+	if err != nil {
+		if errors.Is(err, sprint.ErrSprintNotFound) {
+			return StudyCycle{}, ErrStudyCycleNotFound
+		}
+		return StudyCycle{}, err
+	}
+	if sp.UserID != userID {
+		return StudyCycle{}, ErrStudyCycleNotFound
 	}
 
 	now := s.now().UTC()
@@ -187,7 +213,7 @@ func (s *StudyCycleService) Resume(ctx context.Context, cycleID uuid.UUID) (Stud
 	return *updated, nil
 }
 
-func (s *StudyCycleService) Stop(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
+func (s *StudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {
 	if !validStopReason(input.Reason) {
 		return StudyCycle{}, ErrInvalidStopReason
 	}
@@ -197,6 +223,17 @@ func (s *StudyCycleService) Stop(ctx context.Context, cycleID uuid.UUID, input S
 		existing, err := tx.LockCycleByID(ctx, cycleID)
 		if err != nil {
 			return err
+		}
+
+		sp, err := tx.LockSprintByID(ctx, existing.SprintID)
+		if err != nil {
+			if errors.Is(err, sprint.ErrSprintNotFound) {
+				return ErrStudyCycleNotFound
+			}
+			return err
+		}
+		if sp.UserID != userID {
+			return ErrStudyCycleNotFound
 		}
 
 		now := s.now().UTC()
