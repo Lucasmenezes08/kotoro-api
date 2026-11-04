@@ -515,6 +515,76 @@ A inteligência artificial foi utilizada como ferramenta de apoio para revisão 
 | Consistência | Uso futuro de publisher confirms, ack manual, idempotência, retry e DLQ |
 | Cronômetros | Persistência por timestamps em vez de goroutines permanentes |
 
+## Autenticação e Multi-tenancy (`auth`)
+
+A API conta com um módulo completo de autenticação e isolamento de dados por usuário (*multi-tenancy* lógico).
+
+### Modelo de Segurança
+
+- **Hashing de Senha**: Senhas são processadas de forma irreversível utilizando `bcrypt` com custo computacional seguro (custo 12).
+- **Tokens JWT**: Sessões *stateless* via tokens assinados com HMAC-SHA256 (`golang-jwt/jwt/v5`), contendo `user_id`, `email` e prazo de expiração (padrão de 24 horas).
+- **Middleware de Autenticação**: Valida o cabeçalho HTTP `Authorization: Bearer <token>` e injeta o identificador seguro do usuário (`uuid.UUID`) no `context.Context` de cada requisição.
+- **Isolamento de Dados**:
+  - Matérias (`subjects`) e sprints (`sprints`) possuem chave estrangeira `user_id` não nula referenciando `users(id)`.
+  - Blocos de sprint (`sprint_block`), tarefas (`block_tasks`) e ciclos de estudo (`study_cycles`) são validados contra a posse da sprint pelo usuário autenticado, impedindo acesso indevido ou vazamento de dados entre estudantes.
+  - Tentativas de acesso a recursos de outro usuário resultam em `404 Not Found` para evitar enumeração de recursos de outros usuários.
+
+### Endpoints de Autenticação
+
+| Método | Rota | Autenticação | Descrição |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | Pública | Cadastra um novo usuário com `name`, `email` e `password` (mínimo 8 caracteres) |
+| `POST` | `/auth/login` | Pública | Autentica com `email` e `password`, retornando o token JWT e dados do usuário |
+| `GET` | `/auth/me` | Bearer Token | Retorna os dados do usuário autenticado a partir do token |
+
+Exemplo de cadastro (`POST /auth/register`):
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "name": "Lucas Menezes",
+  "email": "lucas@example.com",
+  "password": "senhaSegura123"
+}
+```
+
+Resposta (`201 Created`):
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "c379a04a-8745-42d4-a7fc-2e6b7fc5ef02",
+    "name": "Lucas Menezes",
+    "email": "lucas@example.com",
+    "created_at": "2026-11-04T12:00:00Z",
+    "updated_at": "2026-11-04T12:00:00Z"
+  }
+}
+```
+
+Exemplo de login (`POST /auth/login`):
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "lucas@example.com",
+  "password": "senhaSegura123"
+}
+```
+
+Para acessar qualquer endpoint protegido da aplicação, inclua o cabeçalho:
+
+```http
+Authorization: Bearer <token>
+```
+
+---
+
 ## Execução de ciclos de estudo (`study-cycles`)
 
 A fase de execução de uma sprint ocorre por meio de ciclos de estudo (`study_cycles`), que controlam o tempo efetivamente estudado em cada bloco ou conjunto de tarefas sem manter goroutines ou timers em memória por sessão.
@@ -606,12 +676,10 @@ Content-Type: application/json
 
 A transação de `Stop` já delimita a fronteira atômica onde os registros da tabela `outbox_events` (como `study_cycle.finished` e `block_task.completed`) serão inseridos na mesma transação do PostgreSQL antes da publicação assíncrona pelo Outbox Relay no RabbitMQ.
 
-## Limitações conhecidas da primeira entrega
+## Limitações conhecidas e próximos passos
 
-- o sistema ainda não possui autenticação ou isolamento por usuário;
-- as sprints e os ciclos ainda fazem parte do roadmap;
-- RabbitMQ e Transactional Outbox ainda pertencem à arquitetura-alvo;
-- o número de workers ainda é um limite fixo;
+- RabbitMQ e Transactional Outbox pertencem à arquitetura-alvo da próxima etapa de mensageria;
+- o número de workers na importação em lote ainda é um limite fixo;
 - a recuperação de ações executadas totalmente offline ainda não está implementada;
 - a disponibilidade do PostgreSQL continua sendo necessária para operações de escrita;
-- a restrição definitiva para nomes duplicados precisa estar coerente entre service e banco.
+- a restrição definitiva para nomes duplicados está alinhada por usuário entre service e banco.
