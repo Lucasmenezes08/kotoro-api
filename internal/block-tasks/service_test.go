@@ -313,6 +313,109 @@ func TestBlockTaskServiceUpdate(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+	t.Run("allows updating task status to feita during in-progress sprint on in-progress block", func(t *testing.T) {
+		inProgressSprint := fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		inProgressBlock := fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
+			return &sprintblocks.SprintBlock{Status: sprintblocks.InProgress}, nil
+		}}
+		statusDone := TaskDone
+		called := false
+		repo := &fakeTaskRepository{
+			getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*BlockTask, error) {
+				return &BlockTask{ID: taskID, Status: TaskPending}, nil
+			},
+			updateFn: func(_ context.Context, _, _ uuid.UUID, input BlockTaskUpdateModel) (*BlockTask, error) {
+				called = true
+				if input.Status == nil || *input.Status != TaskDone || !input.CompletedAtSet || input.CompletedAt == nil {
+					t.Fatalf("expected status feita with completed_at set, got %#v", input)
+				}
+				return &BlockTask{ID: taskID, Status: TaskDone, CompletedAt: input.CompletedAt}, nil
+			},
+		}
+		service := NewBlockTaskService(repo, inProgressSprint, inProgressBlock)
+		updated, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, taskID, BlockTaskUpdateInput{
+			Status: &statusDone,
+		})
+		if err != nil || updated == nil || !called {
+			t.Fatalf("expected successful task status update during in_progress block, got %v", err)
+		}
+	})
+	t.Run("allows updating task status to pendente and clears completed_at", func(t *testing.T) {
+		inProgressSprint := fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		inProgressBlock := fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
+			return &sprintblocks.SprintBlock{Status: sprintblocks.InProgress}, nil
+		}}
+		statusPending := TaskPending
+		called := false
+		repo := &fakeTaskRepository{
+			getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*BlockTask, error) {
+				return &BlockTask{ID: taskID, Status: TaskDone}, nil
+			},
+			updateFn: func(_ context.Context, _, _ uuid.UUID, input BlockTaskUpdateModel) (*BlockTask, error) {
+				called = true
+				if input.Status == nil || *input.Status != TaskPending || !input.CompletedAtSet || input.CompletedAt != nil {
+					t.Fatalf("expected status pendente with completed_at nil, got %#v", input)
+				}
+				return &BlockTask{ID: taskID, Status: TaskPending, CompletedAt: nil}, nil
+			},
+		}
+		service := NewBlockTaskService(repo, inProgressSprint, inProgressBlock)
+		updated, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, taskID, BlockTaskUpdateInput{
+			Status: &statusPending,
+		})
+		if err != nil || updated == nil || !called {
+			t.Fatalf("expected successful task toggle to pendente, got %v", err)
+		}
+	})
+	t.Run("rejects metadata update during in-progress sprint on in-progress block", func(t *testing.T) {
+		inProgressSprint := fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		inProgressBlock := fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
+			return &sprintblocks.SprintBlock{Status: sprintblocks.InProgress}, nil
+		}}
+		title := "new title"
+		repo := &fakeTaskRepository{}
+		service := NewBlockTaskService(repo, inProgressSprint, inProgressBlock)
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, taskID, BlockTaskUpdateInput{
+			Title: &title,
+		})
+		if !errors.Is(err, ErrSprintBlockNotInPlanning) {
+			t.Fatalf("expected ErrSprintBlockNotInPlanning, got %v", err)
+		}
+	})
+	t.Run("rejects update on finished block", func(t *testing.T) {
+		finishedBlock := fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
+			return &sprintblocks.SprintBlock{Status: sprintblocks.Finished}, nil
+		}}
+		statusDone := TaskDone
+		service := NewBlockTaskService(&fakeTaskRepository{}, planningSprint(), finishedBlock)
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, taskID, BlockTaskUpdateInput{
+			Status: &statusDone,
+		})
+		if !errors.Is(err, ErrSprintBlockNotInPlanning) {
+			t.Fatalf("expected ErrSprintBlockNotInPlanning on finished block, got %v", err)
+		}
+	})
+	t.Run("rejects invalid task status", func(t *testing.T) {
+		invalidStatus := BlockTaskStatus("status_invalido")
+		repo := &fakeTaskRepository{
+			getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*BlockTask, error) {
+				return &BlockTask{ID: taskID}, nil
+			},
+		}
+		service := NewBlockTaskService(repo, planningSprint(), pendingBlock())
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, taskID, BlockTaskUpdateInput{
+			Status: &invalidStatus,
+		})
+		if !errors.Is(err, ErrBlockTaskStatusInvalid) {
+			t.Fatalf("expected ErrBlockTaskStatusInvalid, got %v", err)
+		}
+	})
 }
 
 func TestBlockTaskServiceDeleteAndReorder(t *testing.T) {

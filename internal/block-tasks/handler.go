@@ -24,11 +24,12 @@ type createBlockTaskRequest struct {
 }
 
 type updateBlockTaskRequest struct {
-	Title            *string       `json:"title"`
-	Description      *string       `json:"description"`
-	Position         *int          `json:"position"`
-	Priority         *TaskPriority `json:"priority"`
-	EstimatedSeconds *int          `json:"estimated_seconds"`
+	Title            *string          `json:"title"`
+	Description      *string          `json:"description"`
+	Position         *int             `json:"position"`
+	Priority         *TaskPriority    `json:"priority"`
+	EstimatedSeconds *int             `json:"estimated_seconds"`
+	Status           *BlockTaskStatus `json:"status"`
 }
 
 type reorderBlockTasksRequest struct {
@@ -124,7 +125,7 @@ func (h *BlockTaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	task, err := h.service.Update(r.Context(), userID, sprintID, blockID, taskID, BlockTaskUpdateInput{
 		Title: req.Title, Description: req.Description, Position: req.Position,
-		Priority: req.Priority, EstimatedSeconds: req.EstimatedSeconds,
+		Priority: req.Priority, EstimatedSeconds: req.EstimatedSeconds, Status: req.Status,
 	})
 	if err != nil {
 		h.writeError(w, err, "update block task")
@@ -184,8 +185,8 @@ func (h *BlockTaskHandler) writeError(w http.ResponseWriter, err error, operatio
 	switch {
 	case errors.Is(err, ErrBlockTaskTitleRequired), errors.Is(err, ErrBlockTaskTitleTooLong),
 		errors.Is(err, ErrBlockTaskUpdateEmpty), errors.Is(err, ErrBlockTaskPositionInvalid),
-		errors.Is(err, ErrBlockTaskPriorityInvalid), errors.Is(err, ErrBlockTaskEstimatedSecondsInvalid),
-		errors.Is(err, ErrBlockTaskOrderInvalid):
+		errors.Is(err, ErrBlockTaskPriorityInvalid), errors.Is(err, ErrBlockTaskStatusInvalid),
+		errors.Is(err, ErrBlockTaskEstimatedSecondsInvalid), errors.Is(err, ErrBlockTaskOrderInvalid):
 		utils.WriteJson(w, http.StatusBadRequest, blockTaskErrorResponse{Error: err.Error()})
 	case errors.Is(err, sprint.ErrSprintNotFound), errors.Is(err, sprintblocks.ErrSprintBlockNotFound),
 		errors.Is(err, ErrBlockTaskNotFound):

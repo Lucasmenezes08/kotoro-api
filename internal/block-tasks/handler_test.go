@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
@@ -136,6 +137,7 @@ func TestBlockTaskHandlerErrorMappings(t *testing.T) {
 		{"sprint conflict", sprintblocks.ErrSprintNotInPlanning, http.StatusConflict},
 		{"block conflict", ErrSprintBlockNotInPlanning, http.StatusConflict},
 		{"position conflict", ErrBlockTaskPositionConflict, http.StatusConflict},
+		{"status invalid", ErrBlockTaskStatusInvalid, http.StatusBadRequest},
 		{"unexpected", errors.New("sql details"), http.StatusInternalServerError},
 	}
 	for _, test := range tests {
@@ -171,6 +173,20 @@ func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		NewBlockTaskHandler(service).Update(recorder, taskRequest(http.MethodPatch, `{"title":"updated"}`, sprintID, blockID, taskID))
 		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `"title":"updated"`) {
+			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
+	t.Run("patch updates status and returns completed_at", func(t *testing.T) {
+		completedAt := time.Now().UTC()
+		service := &fakeTaskService{updateFn: func(_ context.Context, _, _, _, _ uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
+			if input.Status == nil || *input.Status != TaskDone {
+				t.Fatalf("expected status feita, got %#v", input.Status)
+			}
+			return &BlockTask{ID: taskID, SprintBlockID: blockID, Title: "task", Status: TaskDone, CompletedAt: &completedAt, Priority: PriorityMedium}, nil
+		}}
+		recorder := httptest.NewRecorder()
+		NewBlockTaskHandler(service).Update(recorder, taskRequest(http.MethodPatch, `{"status":"feita"}`, sprintID, blockID, taskID))
+		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `"status":"feita"`) || !strings.Contains(recorder.Body.String(), `"completed_at"`) {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
 		}
 	})
