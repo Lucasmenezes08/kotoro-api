@@ -31,10 +31,12 @@ func New(db *sqlx.DB) *Application {
 	RegisterBlockTaskRoutes(mux, db, authMiddleware)
 	RegisterStudyCycleRoutes(mux, db, authMiddleware)
 
+	handler := CorsMiddleware(mux)
+
 	return &Application{
 		server: &http.Server{
 			Addr:              ":8080",
-			Handler:           mux,
+			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      10 * time.Second,
 			IdleTimeout:       60 * time.Second,
