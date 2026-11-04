@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -12,11 +13,12 @@ import (
 )
 
 type SubjectRepositoryContract interface {
-	Create(ctx context.Context, subject SubjectCreateInput) error
-	GetAll(ctx context.Context) ([]Subject, error)
-	GetByName(ctx context.Context, name string) (*Subject, error)
-	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
+	Create(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error
+	GetAll(ctx context.Context, userID uuid.UUID) ([]Subject, error)
+	GetById(ctx context.Context, id uuid.UUID) (*Subject, error)
+	GetByName(ctx context.Context, userID uuid.UUID, name string) (*Subject, error)
+	Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error
+	DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error
 }
 
 type SubjectRepository struct {
@@ -34,9 +36,10 @@ type SubjectUpdateInput struct {
 }
 
 const (
-	uniqueViolationCode        = "23505"
-	activeNameUniqueIndex      = "subjects_active_name_unique"
-	legacyNameUniqueConstraint = "subjects_name_key"
+	uniqueViolationCode          = "23505"
+	activeUserSubjectUniqueIndex = "subjects_active_user_name_unique"
+	activeNameUniqueIndex        = "subjects_active_name_unique"
+	legacyNameUniqueConstraint   = "subjects_name_key"
 )
 
 func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
@@ -47,7 +50,7 @@ func NewSubjectRepository(db *sqlx.DB) *SubjectRepository {
 
 func (s *SubjectRepository) GetById(ctx context.Context, id uuid.UUID) (*Subject, error) {
 	var subject Subject
-	query := `SELECT id, name, color, created_at, updated_at, deleted_at
+	query := `SELECT id, user_id, name, color, created_at, updated_at, deleted_at
 		FROM subjects WHERE id = $1 AND deleted_at IS NULL LIMIT 1`
 	err := s.db.GetContext(ctx, &subject, query, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -59,37 +62,41 @@ func (s *SubjectRepository) GetById(ctx context.Context, id uuid.UUID) (*Subject
 	return &subject, nil
 }
 
-func (s *SubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
-	subject := make([]Subject, 0)
+func (s *SubjectRepository) GetAll(ctx context.Context, userID uuid.UUID) ([]Subject, error) {
+	subjects := make([]Subject, 0)
 	const query = `
 		SELECT
 			id,
+			user_id,
 			name,
 			color,
 			created_at,
 			updated_at,
 			deleted_at
 		FROM subjects
-		WHERE deleted_at IS NULL
+		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
 	`
-	if err := s.db.SelectContext(ctx, &subject, query); err != nil {
+	if err := s.db.SelectContext(ctx, &subjects, query, userID); err != nil {
 		return nil, fmt.Errorf("Error to get all subjects, error, %w", err)
 	}
-	return subject, nil
+	return subjects, nil
 }
 
-func (s *SubjectRepository) GetByName(ctx context.Context, name string) (*Subject, error) {
+func (s *SubjectRepository) GetByName(ctx context.Context, userID uuid.UUID, name string) (*Subject, error) {
 	var subject Subject
 
-	query := "SELECT id,name,color,created_at,updated_at,deleted_at FROM subjects WHERE deleted_at IS NULL AND name = $1 LIMIT 1"
+	query := `
+		SELECT id, user_id, name, color, created_at, updated_at, deleted_at
+		FROM subjects
+		WHERE user_id = $1 AND deleted_at IS NULL AND LOWER(name) = LOWER($2)
+		LIMIT 1
+	`
 
-	err := s.db.GetContext(ctx, &subject, query, name)
-
+	err := s.db.GetContext(ctx, &subject, query, userID, strings.TrimSpace(name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSubjectNotFound
 	}
-
 	if err != nil {
 		return nil, fmt.Errorf("Error to get subject by name, error, %w", err)
 	}
@@ -97,16 +104,18 @@ func (s *SubjectRepository) GetByName(ctx context.Context, name string) (*Subjec
 	return &subject, nil
 }
 
-func (s *SubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
-	query := "UPDATE subjects SET name = COALESCE($1::varchar, name), color = COALESCE($2::colors, color), updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
+func (s *SubjectRepository) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error {
+	query := `
+		UPDATE subjects
+		SET name = COALESCE($1::varchar, name), color = COALESCE($2::colors, color), updated_at = now()
+		WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL
+	`
 
-	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id)
-
+	result, err := s.db.ExecContext(ctx, query, input.Name, input.Color, id, userID)
 	if err != nil {
 		if isSubjectNameUniqueViolation(err) {
 			return ErrSubjectDuplicated
 		}
-
 		return fmt.Errorf("Update subjects failed: %w", err)
 	}
 
@@ -122,14 +131,14 @@ func (s *SubjectRepository) Update(ctx context.Context, id uuid.UUID, input Subj
 	return nil
 }
 
-func (s *SubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
-	_, err := s.db.NamedExecContext(ctx, "INSERT INTO subjects (name ,color) VALUES (:name, :color)", &subject)
+func (s *SubjectRepository) Create(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error {
+	query := `INSERT INTO subjects (user_id, name, color) VALUES ($1, $2, $3)`
+	_, err := s.db.ExecContext(ctx, query, userID, subject.Name, subject.Color)
 
 	if err != nil {
 		if isSubjectNameUniqueViolation(err) {
 			return ErrSubjectDuplicated
 		}
-
 		return fmt.Errorf("Error to create subject, error, %w", err)
 	}
 
@@ -142,14 +151,14 @@ func isSubjectNameUniqueViolation(err error) bool {
 		return false
 	}
 
-	return pgErr.ConstraintName == activeNameUniqueIndex ||
+	return pgErr.ConstraintName == activeUserSubjectUniqueIndex ||
+		pgErr.ConstraintName == activeNameUniqueIndex ||
 		pgErr.ConstraintName == legacyNameUniqueConstraint
 }
 
-func (s *SubjectRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
-
-	query := "UPDATE subjects SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL"
-	result, err := s.db.ExecContext(ctx, query, id)
+func (s *SubjectRepository) DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error {
+	query := "UPDATE subjects SET deleted_at = now(), updated_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL"
+	result, err := s.db.ExecContext(ctx, query, id, userID)
 
 	if err != nil {
 		return fmt.Errorf("Error to delete by id, error, %w", err)
