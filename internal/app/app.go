@@ -19,6 +19,7 @@ func New(db *sqlx.DB) *Application {
 	RegisterSprintRoutes(mux, db)
 	RegisterSprintBlockRoutes(mux, db)
 	RegisterBlockTaskRoutes(mux, db)
+	RegisterStudyCycleRoutes(mux, db)
 
 	return &Application{
 		server: &http.Server{

@@ -6,6 +6,7 @@ import (
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
+	studycycles "github.com/Lucasmenezes08/kotoro-api.git/internal/study-cycles"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
 	"github.com/jmoiron/sqlx"
 )
@@ -69,4 +70,15 @@ func RegisterSprintRoutes(mux *http.ServeMux, db *sqlx.DB) {
 	mux.HandleFunc("POST /sprints", controller.Create)
 	mux.HandleFunc("PATCH /sprints/{id}", controller.Update)
 	mux.HandleFunc("DELETE /sprints/{id}", controller.DeleteById)
+}
+
+func RegisterStudyCycleRoutes(mux *http.ServeMux, db *sqlx.DB) {
+	repository := studycycles.NewStudyCycleRepository(db)
+	service := studycycles.NewStudyCycleService(repository)
+	handler := studycycles.NewStudyCycleHandler(service)
+
+	mux.HandleFunc("POST /sprints/{sprintID}/study-cycles/play", handler.Play)
+	mux.HandleFunc("POST /study-cycles/{cycleID}/pause", handler.Pause)
+	mux.HandleFunc("POST /study-cycles/{cycleID}/resume", handler.Resume)
+	mux.HandleFunc("POST /study-cycles/{cycleID}/stop", handler.Stop)
 }
