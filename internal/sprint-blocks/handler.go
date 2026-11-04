@@ -204,6 +204,7 @@ func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operat
 		errors.Is(err, ErrSprintBlockNotFound):
 		utils.WriteJson(w, http.StatusNotFound, sprintBlockErrorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintNotInPlanning),
+		errors.Is(err, ErrSprintBlockNotEditable),
 		errors.Is(err, ErrSprintBlockPositionConflict),
 		errors.Is(err, ErrSprintBlockSubjectConflict):
 		utils.WriteJson(w, http.StatusConflict, sprintBlockErrorResponse{Error: err.Error()})

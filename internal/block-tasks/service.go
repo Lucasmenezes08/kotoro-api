@@ -224,7 +224,7 @@ func (s *BlockTaskService) requirePlanningHierarchy(ctx context.Context, userID,
 	if sprintValue.UserID != userID {
 		return sprint.ErrSprintNotFound
 	}
-	if sprintValue.Status != sprint.Creating {
+	if sprintValue.Status != sprint.Creating && sprintValue.Status != sprint.InProgress {
 		return sprintblocks.ErrSprintNotInPlanning
 	}
 	block, err := s.blocks.GetByID(ctx, sprintID, blockID)

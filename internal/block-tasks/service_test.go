@@ -154,7 +154,7 @@ func TestBlockTaskServiceHierarchyAndState(t *testing.T) {
 	}{
 		{"sprint missing", fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) { return nil, sprint.ErrSprintNotFound }}, pendingBlock(), sprint.ErrSprintNotFound},
 		{"sprint not planning", fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
-			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+			return &sprint.Sprint{Status: sprint.Finished, UserID: defaultTestUserID}, nil
 		}}, pendingBlock(), sprintblocks.ErrSprintNotInPlanning},
 		{"block missing or foreign", planningSprint(), fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
 			return nil, sprintblocks.ErrSprintBlockNotFound

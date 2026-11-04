@@ -169,7 +169,7 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 	})
 	t.Run("sprint outside planning", func(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
-			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+			return &sprint.Sprint{Status: sprint.Finished, UserID: defaultTestUserID}, nil
 		}}, existingSubjectReader())
 		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 		if !errors.Is(err, ErrSprintNotInPlanning) {
@@ -332,6 +332,41 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Title: &title})
 		if !errors.Is(err, failure) {
 			t.Fatalf("expected wrapped failure, got %v", err)
+		}
+	})
+	t.Run("allows updating pending block when sprint is in_progress", func(t *testing.T) {
+		title := "new title"
+		inProgressSprintReader := fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		repo := &fakeBlockRepository{
+			getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error) {
+				return &SprintBlock{ID: blockID, Status: Pending}, nil
+			},
+			updateFn: func(context.Context, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error) {
+				return &SprintBlock{ID: blockID, Status: Pending, Title: &title}, nil
+			},
+		}
+		service := NewSprintBlockService(repo, inProgressSprintReader, existingSubjectReader())
+		updated, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Title: &title})
+		if err != nil || updated == nil {
+			t.Fatalf("expected successful update of pending block in in_progress sprint, got %v", err)
+		}
+	})
+	t.Run("rejects updating non-pending block when sprint is in_progress", func(t *testing.T) {
+		title := "new title"
+		inProgressSprintReader := fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
+		}}
+		repo := &fakeBlockRepository{
+			getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error) {
+				return &SprintBlock{ID: blockID, Status: InProgress}, nil
+			},
+		}
+		service := NewSprintBlockService(repo, inProgressSprintReader, existingSubjectReader())
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Title: &title})
+		if !errors.Is(err, ErrSprintBlockNotEditable) {
+			t.Fatalf("expected ErrSprintBlockNotEditable, got %v", err)
 		}
 	})
 }

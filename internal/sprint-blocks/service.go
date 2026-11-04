@@ -24,6 +24,7 @@ var (
 	ErrSprintBlockTitleInvalid            = errors.New("sprint block title cannot be empty")
 	ErrSprintBlockTitleTooLong            = errors.New("sprint block title cannot exceed 100 characters")
 	ErrSprintNotInPlanning                = errors.New("sprint blocks can only be changed while sprint is creating")
+	ErrSprintBlockNotEditable             = errors.New("completed or in-progress sprint blocks cannot be modified")
 	ErrInvalidSprintBlockOrder            = errors.New("invalid sprint block order")
 )
 
@@ -55,7 +56,7 @@ func NewSprintBlockService(repository SprintBlockRepositoryContract, sprintReade
 }
 
 func (s *SprintBlockService) Create(ctx context.Context, userID, sprintID uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
-	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
+	if _, err := s.requireEditableSprint(ctx, userID, sprintID); err != nil {
 		return nil, err
 	}
 	title, err := normalizeTitle(input.Title)
@@ -124,11 +125,16 @@ func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, block
 	if input.SubjectID == nil && input.Title == nil && input.Position == nil && input.EstimatedSeconds == nil {
 		return nil, ErrSprintBlockUpdateEmpty
 	}
-	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
+	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := s.repository.GetByID(ctx, sprintID, blockID); err != nil {
+	existingBlock, err := s.repository.GetByID(ctx, sprintID, blockID)
+	if err != nil {
 		return nil, err
+	}
+	if sp.Status == sprint.InProgress && existingBlock.Status != Pending {
+		return nil, ErrSprintBlockNotEditable
 	}
 	if input.Title != nil {
 		title, err := normalizeTitle(input.Title)
@@ -164,8 +170,18 @@ func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, block
 }
 
 func (s *SprintBlockService) Delete(ctx context.Context, userID, sprintID, blockID uuid.UUID) error {
-	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
+	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
+	if err != nil {
 		return err
+	}
+	if sp.Status == sprint.InProgress {
+		existingBlock, err := s.repository.GetByID(ctx, sprintID, blockID)
+		if err != nil {
+			return err
+		}
+		if existingBlock.Status != Pending {
+			return ErrSprintBlockNotEditable
+		}
 	}
 	if err := s.repository.Delete(ctx, sprintID, blockID); err != nil {
 		return fmt.Errorf("delete sprint block: %w", err)
@@ -174,7 +190,8 @@ func (s *SprintBlockService) Delete(ctx context.Context, userID, sprintID, block
 }
 
 func (s *SprintBlockService) Reorder(ctx context.Context, userID, sprintID uuid.UUID, blockIDs []uuid.UUID) error {
-	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
+	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
+	if err != nil {
 		return err
 	}
 	blocks, err := s.repository.GetAllBySprintID(ctx, sprintID)
@@ -184,17 +201,23 @@ func (s *SprintBlockService) Reorder(ctx context.Context, userID, sprintID uuid.
 	if len(blocks) != len(blockIDs) {
 		return ErrInvalidSprintBlockOrder
 	}
-	expected := make(map[uuid.UUID]struct{}, len(blocks))
+	expected := make(map[uuid.UUID]SprintBlock, len(blocks))
 	for _, block := range blocks {
-		expected[block.ID] = struct{}{}
+		expected[block.ID] = block
 	}
 	seen := make(map[uuid.UUID]struct{}, len(blockIDs))
-	for _, id := range blockIDs {
+	for newIdx, id := range blockIDs {
 		if _, duplicate := seen[id]; duplicate {
 			return ErrInvalidSprintBlockOrder
 		}
-		if _, exists := expected[id]; !exists {
+		b, exists := expected[id]
+		if !exists {
 			return ErrInvalidSprintBlockOrder
+		}
+		if sp.Status == sprint.InProgress && b.Status != Pending {
+			if b.Position != newIdx+1 {
+				return ErrInvalidSprintBlockOrder
+			}
 		}
 		seen[id] = struct{}{}
 	}
@@ -204,18 +227,23 @@ func (s *SprintBlockService) Reorder(ctx context.Context, userID, sprintID uuid.
 	return nil
 }
 
-func (s *SprintBlockService) requirePlanningSprint(ctx context.Context, userID, sprintID uuid.UUID) error {
+func (s *SprintBlockService) requireEditableSprint(ctx context.Context, userID, sprintID uuid.UUID) (*sprint.Sprint, error) {
 	value, err := s.sprintReader.GetById(ctx, sprintID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if value.UserID != userID {
-		return sprint.ErrSprintNotFound
+		return nil, sprint.ErrSprintNotFound
 	}
-	if value.Status != sprint.Creating {
-		return ErrSprintNotInPlanning
+	if value.Status != sprint.Creating && value.Status != sprint.InProgress {
+		return nil, ErrSprintNotInPlanning
 	}
-	return nil
+	return value, nil
+}
+
+func (s *SprintBlockService) requirePlanningSprint(ctx context.Context, userID, sprintID uuid.UUID) error {
+	_, err := s.requireEditableSprint(ctx, userID, sprintID)
+	return err
 }
 
 func (s *SprintBlockService) requireSubject(ctx context.Context, userID, subjectID uuid.UUID) error {
