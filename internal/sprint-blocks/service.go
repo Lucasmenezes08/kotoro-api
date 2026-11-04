@@ -172,18 +172,8 @@ func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, block
 }
 
 func (s *SprintBlockService) Delete(ctx context.Context, userID, sprintID, blockID uuid.UUID) error {
-	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
-	if err != nil {
+	if _, err := s.requireEditableSprint(ctx, userID, sprintID); err != nil {
 		return err
-	}
-	if sp.Status == sprint.InProgress {
-		existingBlock, err := s.repository.GetByID(ctx, sprintID, blockID)
-		if err != nil {
-			return err
-		}
-		if existingBlock.Status != Pending {
-			return ErrSprintBlockNotEditable
-		}
 	}
 	if err := s.repository.Delete(ctx, sprintID, blockID); err != nil {
 		return fmt.Errorf("delete sprint block: %w", err)
