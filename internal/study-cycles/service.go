@@ -136,11 +136,56 @@ func (s *StudyCycleService) Play(ctx context.Context, sprintID uuid.UUID, input 
 }
 
 func (s *StudyCycleService) Pause(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
-	return StudyCycle{}, errors.New("not implemented")
+	existing, err := s.repo.GetByID(ctx, cycleID)
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	now := s.now().UTC()
+	paused, err := existing.ApplyPause(now)
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	updated, err := s.repo.PauseConditional(ctx, PauseStudyCycleModel{
+		ID:             cycleID,
+		ExpectedStatus: StudyCycleInProgress,
+		Status:         StudyCyclePaused,
+		PausedAt:       now,
+		ElapsedSeconds: paused.ElapsedSeconds,
+	})
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	return *updated, nil
 }
 
 func (s *StudyCycleService) Resume(ctx context.Context, cycleID uuid.UUID) (StudyCycle, error) {
-	return StudyCycle{}, errors.New("not implemented")
+	existing, err := s.repo.GetByID(ctx, cycleID)
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	now := s.now().UTC()
+	resumed, err := existing.ApplyResume(now)
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	updated, err := s.repo.ResumeConditional(ctx, ResumeStudyCycleModel{
+		ID:             cycleID,
+		ExpectedStatus: StudyCyclePaused,
+		Status:         StudyCycleInProgress,
+		RunningSince:   now,
+		StartedAt:      resumed.StartedAt,
+		ElapsedSeconds: resumed.ElapsedSeconds,
+	})
+	if err != nil {
+		return StudyCycle{}, err
+	}
+
+	return *updated, nil
 }
 
 func (s *StudyCycleService) Stop(ctx context.Context, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error) {

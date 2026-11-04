@@ -567,3 +567,218 @@ func TestStudyCycleServicePlay(t *testing.T) {
 		}
 	})
 }
+
+func TestStudyCycleServicePause(t *testing.T) {
+	startedAt := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	runningSince := startedAt.Add(10 * time.Minute)
+	pauseAt := runningSince.Add(75 * time.Second)
+
+	t.Run("pauses an in-progress cycle and consolidates the running interval", func(t *testing.T) {
+		cycleID := uuid.New()
+		sprintID := uuid.New()
+		blockID := uuid.New()
+
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*StudyCycle, error) {
+				if id != cycleID {
+					t.Fatalf("expected cycle id %v, got %v", cycleID, id)
+				}
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       sprintID,
+					SprintBlockID:  blockID,
+					SequenceNumber: 2,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					TimerType:      TimerTypeFree,
+					Status:         StudyCycleInProgress,
+					StartedAt:      startedAt,
+					RunningSince:   &runningSince,
+					ElapsedSeconds: 120,
+				}, nil
+			},
+			pauseConditionalFn: func(_ context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
+				if input.ID != cycleID || input.ExpectedStatus != StudyCycleInProgress || input.Status != StudyCyclePaused {
+					t.Fatalf("unexpected pause model: %#v", input)
+				}
+				if input.ElapsedSeconds != 195 {
+					t.Fatalf("expected consolidated elapsed_seconds 195, got %d", input.ElapsedSeconds)
+				}
+				if !input.PausedAt.Equal(pauseAt) {
+					t.Fatalf("expected paused_at %v, got %v", pauseAt, input.PausedAt)
+				}
+				pausedCopy := input.PausedAt
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       sprintID,
+					SprintBlockID:  blockID,
+					SequenceNumber: 2,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					TimerType:      TimerTypeFree,
+					Status:         StudyCyclePaused,
+					StartedAt:      startedAt,
+					RunningSince:   nil,
+					PausedAt:       &pausedCopy,
+					ElapsedSeconds: input.ElapsedSeconds,
+				}, nil
+			},
+		}
+
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
+		cycle, err := service.Pause(context.Background(), cycleID)
+		if err != nil {
+			t.Fatalf("expected pause to succeed, got %v", err)
+		}
+		if cycle.Status != StudyCyclePaused || cycle.ElapsedSeconds != 195 || cycle.RunningSince != nil || cycle.PausedAt == nil || !cycle.PausedAt.Equal(pauseAt) {
+			t.Fatalf("unexpected paused cycle: %#v", cycle)
+		}
+	})
+
+	t.Run("rejects an already paused cycle", func(t *testing.T) {
+		cycleID := uuid.New()
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, Status: StudyCyclePaused, PausedAt: &pauseAt}, nil
+			},
+		}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
+		_, err := service.Pause(context.Background(), cycleID)
+		if !errors.Is(err, ErrStudyCycleNotRunning) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
+			t.Fatalf("expected ErrStudyCycleNotRunning, got %v", err)
+		}
+	})
+
+	t.Run("rejects a finished or canceled cycle", func(t *testing.T) {
+		for _, status := range []StudyCycleStatus{StudyCycleFinished, StudyCycleCancelled} {
+			cycleID := uuid.New()
+			repo := &fakeStudyCycleRepository{
+				getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{ID: cycleID, Status: status, EndedAt: &pauseAt}, nil
+				},
+			}
+			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
+			_, err := service.Pause(context.Background(), cycleID)
+			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleNotRunning) {
+				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped/ErrStudyCycleNotRunning, got %v", status, err)
+			}
+		}
+	})
+
+	t.Run("returns not found correctly", func(t *testing.T) {
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return nil, ErrStudyCycleNotFound
+			},
+		}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return pauseAt })
+		_, err := service.Pause(context.Background(), uuid.New())
+		if !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
+		}
+	})
+}
+
+func TestStudyCycleServiceResume(t *testing.T) {
+	startedAt := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	pausedAt := startedAt.Add(15 * time.Minute)
+	resumeAt := pausedAt.Add(5 * time.Minute)
+
+	t.Run("resumes a paused cycle preserving started_at and accumulated elapsed time", func(t *testing.T) {
+		cycleID := uuid.New()
+		sprintID := uuid.New()
+		blockID := uuid.New()
+
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(_ context.Context, id uuid.UUID) (*StudyCycle, error) {
+				if id != cycleID {
+					t.Fatalf("expected cycle id %v, got %v", cycleID, id)
+				}
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       sprintID,
+					SprintBlockID:  blockID,
+					SequenceNumber: 1,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					TimerType:      TimerTypeFree,
+					Status:         StudyCyclePaused,
+					StartedAt:      startedAt,
+					PausedAt:       &pausedAt,
+					ElapsedSeconds: 900,
+				}, nil
+			},
+			resumeConditionalFn: func(_ context.Context, input ResumeStudyCycleModel) (*StudyCycle, error) {
+				if input.ID != cycleID || input.ExpectedStatus != StudyCyclePaused || input.Status != StudyCycleInProgress {
+					t.Fatalf("unexpected resume model: %#v", input)
+				}
+				if !input.StartedAt.Equal(startedAt) || input.ElapsedSeconds != 900 || !input.RunningSince.Equal(resumeAt) {
+					t.Fatalf("expected preserved started_at and elapsed_seconds, got %#v", input)
+				}
+				runningCopy := input.RunningSince
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       sprintID,
+					SprintBlockID:  blockID,
+					SequenceNumber: 1,
+					ExecutionMode:  ExecutionModeSubjectBlock,
+					TimerType:      TimerTypeFree,
+					Status:         StudyCycleInProgress,
+					StartedAt:      input.StartedAt,
+					RunningSince:   &runningCopy,
+					PausedAt:       nil,
+					ElapsedSeconds: input.ElapsedSeconds,
+				}, nil
+			},
+		}
+
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
+		cycle, err := service.Resume(context.Background(), cycleID)
+		if err != nil {
+			t.Fatalf("expected resume to succeed, got %v", err)
+		}
+		if cycle.Status != StudyCycleInProgress || !cycle.StartedAt.Equal(startedAt) || cycle.ElapsedSeconds != 900 || cycle.PausedAt != nil || cycle.RunningSince == nil || !cycle.RunningSince.Equal(resumeAt) {
+			t.Fatalf("unexpected resumed cycle: %#v", cycle)
+		}
+	})
+
+	t.Run("rejects an in-progress cycle", func(t *testing.T) {
+		cycleID := uuid.New()
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, Status: StudyCycleInProgress, StartedAt: startedAt, RunningSince: &startedAt}, nil
+			},
+		}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
+		_, err := service.Resume(context.Background(), cycleID)
+		if !errors.Is(err, ErrStudyCycleNotPaused) || !errors.Is(err, ErrStudyCycleInvalidTransition) {
+			t.Fatalf("expected ErrStudyCycleNotPaused, got %v", err)
+		}
+	})
+
+	t.Run("rejects terminal cycles", func(t *testing.T) {
+		for _, status := range []StudyCycleStatus{StudyCycleFinished, StudyCycleCancelled} {
+			cycleID := uuid.New()
+			repo := &fakeStudyCycleRepository{
+				getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+					return &StudyCycle{ID: cycleID, Status: status, EndedAt: &pausedAt}, nil
+				},
+			}
+			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
+			_, err := service.Resume(context.Background(), cycleID)
+			if !errors.Is(err, ErrStudyCycleAlreadyStopped) || !errors.Is(err, ErrStudyCycleNotPaused) {
+				t.Fatalf("for status %q expected ErrStudyCycleAlreadyStopped/ErrStudyCycleNotPaused, got %v", status, err)
+			}
+		}
+	})
+
+	t.Run("returns not found correctly", func(t *testing.T) {
+		repo := &fakeStudyCycleRepository{
+			getByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return nil, ErrStudyCycleNotFound
+			},
+		}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return resumeAt })
+		_, err := service.Resume(context.Background(), uuid.New())
+		if !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
+		}
+	})
+}

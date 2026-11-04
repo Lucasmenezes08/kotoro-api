@@ -92,11 +92,92 @@ func (r *StudyCycleRepository) GetByID(ctx context.Context, cycleID uuid.UUID) (
 }
 
 func (r *StudyCycleRepository) PauseConditional(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
-	return nil, errors.New("not implemented")
+	expectedStatus := input.ExpectedStatus
+	if expectedStatus == "" {
+		expectedStatus = StudyCycleInProgress
+	}
+	targetStatus := input.Status
+	if targetStatus == "" {
+		targetStatus = StudyCyclePaused
+	}
+
+	var cycle StudyCycle
+	query := `
+		UPDATE study_cycles
+		SET
+			elapsed_seconds = elapsed_seconds + GREATEST(0, TRUNC(EXTRACT(EPOCH FROM ($2::timestamptz - COALESCE(running_since, $2::timestamptz))))::integer),
+			status = $3::status,
+			paused_at = $2::timestamptz,
+			running_since = NULL,
+			updated_at = $2::timestamptz
+		WHERE id = $1
+		  AND status = $4::status
+		RETURNING ` + studyCycleColumns
+
+	err := r.db.GetContext(ctx, &cycle, query, input.ID, input.PausedAt, targetStatus, expectedStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := r.GetByID(ctx, input.ID)
+		switch {
+		case errors.Is(getErr, ErrStudyCycleNotFound):
+			return nil, ErrStudyCycleNotFound
+		case getErr != nil:
+			return nil, fmt.Errorf("check study cycle after pause: %w", getErr)
+		case existing.Status == StudyCyclePaused:
+			return nil, ErrStudyCycleNotRunning
+		case existing.Status == StudyCycleFinished || existing.Status == StudyCycleCancelled:
+			return nil, errPauseStoppedCycle
+		default:
+			return nil, ErrStudyCycleInvalidTransition
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pause study cycle: %w", err)
+	}
+	return &cycle, nil
 }
 
 func (r *StudyCycleRepository) ResumeConditional(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error) {
-	return nil, errors.New("not implemented")
+	expectedStatus := input.ExpectedStatus
+	if expectedStatus == "" {
+		expectedStatus = StudyCyclePaused
+	}
+	targetStatus := input.Status
+	if targetStatus == "" {
+		targetStatus = StudyCycleInProgress
+	}
+
+	var cycle StudyCycle
+	query := `
+		UPDATE study_cycles
+		SET
+			status = $2::status,
+			running_since = $3::timestamptz,
+			paused_at = NULL,
+			updated_at = $3::timestamptz
+		WHERE id = $1
+		  AND status = $4::status
+		RETURNING ` + studyCycleColumns
+
+	err := r.db.GetContext(ctx, &cycle, query, input.ID, targetStatus, input.RunningSince, expectedStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		existing, getErr := r.GetByID(ctx, input.ID)
+		switch {
+		case errors.Is(getErr, ErrStudyCycleNotFound):
+			return nil, ErrStudyCycleNotFound
+		case getErr != nil:
+			return nil, fmt.Errorf("check study cycle after resume: %w", getErr)
+		case existing.Status == StudyCycleInProgress:
+			return nil, ErrStudyCycleNotPaused
+		case existing.Status == StudyCycleFinished || existing.Status == StudyCycleCancelled:
+			return nil, errResumeStoppedCycle
+		default:
+			return nil, ErrStudyCycleInvalidTransition
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resume study cycle: %w", err)
+	}
+	return &cycle, nil
 }
 
 func (t *studyCycleTxRepository) LockSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
