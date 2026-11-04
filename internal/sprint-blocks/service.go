@@ -36,12 +36,12 @@ type subjectReader interface {
 }
 
 type SprintBlockServiceContract interface {
-	Create(context.Context, uuid.UUID, CreateSprintBlockInput) (*SprintBlock, error)
-	GetAll(context.Context, uuid.UUID) ([]SprintBlock, error)
-	GetByID(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error)
-	Update(context.Context, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
-	Delete(context.Context, uuid.UUID, uuid.UUID) error
-	Reorder(context.Context, uuid.UUID, []uuid.UUID) error
+	Create(context.Context, uuid.UUID, uuid.UUID, CreateSprintBlockInput) (*SprintBlock, error)
+	GetAll(context.Context, uuid.UUID, uuid.UUID) ([]SprintBlock, error)
+	GetByID(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*SprintBlock, error)
+	Update(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
+	Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	Reorder(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
 }
 
 type SprintBlockService struct {
@@ -54,8 +54,8 @@ func NewSprintBlockService(repository SprintBlockRepositoryContract, sprintReade
 	return &SprintBlockService{repository: repository, sprintReader: sprintReader, subjectReader: subjectReader}
 }
 
-func (s *SprintBlockService) Create(ctx context.Context, sprintID uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
-	if err := s.requirePlanningSprint(ctx, sprintID); err != nil {
+func (s *SprintBlockService) Create(ctx context.Context, userID, sprintID uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
+	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
 		return nil, err
 	}
 	title, err := normalizeTitle(input.Title)
@@ -68,7 +68,7 @@ func (s *SprintBlockService) Create(ctx context.Context, sprintID uuid.UUID, inp
 	if input.EstimatedSeconds != nil && (*input.EstimatedSeconds <= 0 || *input.EstimatedSeconds > maxPostgresInteger) {
 		return nil, ErrSprintBlockEstimatedSecondsInvalid
 	}
-	if err := s.requireSubject(ctx, input.SubjectID); err != nil {
+	if err := s.requireSubject(ctx, userID, input.SubjectID); err != nil {
 		return nil, err
 	}
 	if err := s.checkSubjectConflict(ctx, sprintID, input.SubjectID, nil); err != nil {
@@ -87,9 +87,13 @@ func (s *SprintBlockService) Create(ctx context.Context, sprintID uuid.UUID, inp
 	return block, nil
 }
 
-func (s *SprintBlockService) GetAll(ctx context.Context, sprintID uuid.UUID) ([]SprintBlock, error) {
-	if _, err := s.sprintReader.GetById(ctx, sprintID); err != nil {
+func (s *SprintBlockService) GetAll(ctx context.Context, userID, sprintID uuid.UUID) ([]SprintBlock, error) {
+	sp, err := s.sprintReader.GetById(ctx, sprintID)
+	if err != nil {
 		return nil, err
+	}
+	if sp.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
 	}
 	blocks, err := s.repository.GetAllBySprintID(ctx, sprintID)
 	if err != nil {
@@ -101,9 +105,13 @@ func (s *SprintBlockService) GetAll(ctx context.Context, sprintID uuid.UUID) ([]
 	return blocks, nil
 }
 
-func (s *SprintBlockService) GetByID(ctx context.Context, sprintID, blockID uuid.UUID) (*SprintBlock, error) {
-	if _, err := s.sprintReader.GetById(ctx, sprintID); err != nil {
+func (s *SprintBlockService) GetByID(ctx context.Context, userID, sprintID, blockID uuid.UUID) (*SprintBlock, error) {
+	sp, err := s.sprintReader.GetById(ctx, sprintID)
+	if err != nil {
 		return nil, err
+	}
+	if sp.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
 	}
 	block, err := s.repository.GetByID(ctx, sprintID, blockID)
 	if err != nil {
@@ -112,11 +120,11 @@ func (s *SprintBlockService) GetByID(ctx context.Context, sprintID, blockID uuid
 	return block, nil
 }
 
-func (s *SprintBlockService) Update(ctx context.Context, sprintID, blockID uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
+func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, blockID uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
 	if input.SubjectID == nil && input.Title == nil && input.Position == nil && input.EstimatedSeconds == nil {
 		return nil, ErrSprintBlockUpdateEmpty
 	}
-	if err := s.requirePlanningSprint(ctx, sprintID); err != nil {
+	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
 		return nil, err
 	}
 	if _, err := s.repository.GetByID(ctx, sprintID, blockID); err != nil {
@@ -141,7 +149,7 @@ func (s *SprintBlockService) Update(ctx context.Context, sprintID, blockID uuid.
 		}
 	}
 	if input.SubjectID != nil {
-		if err := s.requireSubject(ctx, *input.SubjectID); err != nil {
+		if err := s.requireSubject(ctx, userID, *input.SubjectID); err != nil {
 			return nil, err
 		}
 		if err := s.checkSubjectConflict(ctx, sprintID, *input.SubjectID, &blockID); err != nil {
@@ -155,8 +163,8 @@ func (s *SprintBlockService) Update(ctx context.Context, sprintID, blockID uuid.
 	return block, nil
 }
 
-func (s *SprintBlockService) Delete(ctx context.Context, sprintID, blockID uuid.UUID) error {
-	if err := s.requirePlanningSprint(ctx, sprintID); err != nil {
+func (s *SprintBlockService) Delete(ctx context.Context, userID, sprintID, blockID uuid.UUID) error {
+	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
 		return err
 	}
 	if err := s.repository.Delete(ctx, sprintID, blockID); err != nil {
@@ -165,8 +173,8 @@ func (s *SprintBlockService) Delete(ctx context.Context, sprintID, blockID uuid.
 	return nil
 }
 
-func (s *SprintBlockService) Reorder(ctx context.Context, sprintID uuid.UUID, blockIDs []uuid.UUID) error {
-	if err := s.requirePlanningSprint(ctx, sprintID); err != nil {
+func (s *SprintBlockService) Reorder(ctx context.Context, userID, sprintID uuid.UUID, blockIDs []uuid.UUID) error {
+	if err := s.requirePlanningSprint(ctx, userID, sprintID); err != nil {
 		return err
 	}
 	blocks, err := s.repository.GetAllBySprintID(ctx, sprintID)
@@ -196,10 +204,13 @@ func (s *SprintBlockService) Reorder(ctx context.Context, sprintID uuid.UUID, bl
 	return nil
 }
 
-func (s *SprintBlockService) requirePlanningSprint(ctx context.Context, sprintID uuid.UUID) error {
+func (s *SprintBlockService) requirePlanningSprint(ctx context.Context, userID, sprintID uuid.UUID) error {
 	value, err := s.sprintReader.GetById(ctx, sprintID)
 	if err != nil {
 		return err
+	}
+	if value.UserID != userID {
+		return sprint.ErrSprintNotFound
 	}
 	if value.Status != sprint.Creating {
 		return ErrSprintNotInPlanning
@@ -207,9 +218,15 @@ func (s *SprintBlockService) requirePlanningSprint(ctx context.Context, sprintID
 	return nil
 }
 
-func (s *SprintBlockService) requireSubject(ctx context.Context, subjectID uuid.UUID) error {
-	_, err := s.subjectReader.GetById(ctx, subjectID)
-	return err
+func (s *SprintBlockService) requireSubject(ctx context.Context, userID, subjectID uuid.UUID) error {
+	value, err := s.subjectReader.GetById(ctx, subjectID)
+	if err != nil {
+		return err
+	}
+	if value.UserId != userID {
+		return subject.ErrSubjectNotFound
+	}
+	return nil
 }
 
 func (s *SprintBlockService) checkSubjectConflict(ctx context.Context, sprintID, subjectID uuid.UUID, excludeID *uuid.UUID) error {

@@ -9,59 +9,61 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
 	"github.com/google/uuid"
 )
 
 type fakeBlockService struct {
-	createFn  func(context.Context, uuid.UUID, CreateSprintBlockInput) (*SprintBlock, error)
-	getAllFn  func(context.Context, uuid.UUID) ([]SprintBlock, error)
-	getByIDFn func(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error)
-	updateFn  func(context.Context, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
-	deleteFn  func(context.Context, uuid.UUID, uuid.UUID) error
-	reorderFn func(context.Context, uuid.UUID, []uuid.UUID) error
+	createFn  func(context.Context, uuid.UUID, uuid.UUID, CreateSprintBlockInput) (*SprintBlock, error)
+	getAllFn  func(context.Context, uuid.UUID, uuid.UUID) ([]SprintBlock, error)
+	getByIDFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*SprintBlock, error)
+	updateFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
+	deleteFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	reorderFn func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
 }
 
-func (f *fakeBlockService) Create(ctx context.Context, id uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
+func (f *fakeBlockService) Create(ctx context.Context, userID, id uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
 	if f.createFn == nil {
 		panic("unexpected Create")
 	}
-	return f.createFn(ctx, id, input)
+	return f.createFn(ctx, userID, id, input)
 }
-func (f *fakeBlockService) GetAll(ctx context.Context, id uuid.UUID) ([]SprintBlock, error) {
+func (f *fakeBlockService) GetAll(ctx context.Context, userID, id uuid.UUID) ([]SprintBlock, error) {
 	if f.getAllFn == nil {
 		panic("unexpected GetAll")
 	}
-	return f.getAllFn(ctx, id)
+	return f.getAllFn(ctx, userID, id)
 }
-func (f *fakeBlockService) GetByID(ctx context.Context, sprintID, blockID uuid.UUID) (*SprintBlock, error) {
+func (f *fakeBlockService) GetByID(ctx context.Context, userID, sprintID, blockID uuid.UUID) (*SprintBlock, error) {
 	if f.getByIDFn == nil {
 		panic("unexpected GetByID")
 	}
-	return f.getByIDFn(ctx, sprintID, blockID)
+	return f.getByIDFn(ctx, userID, sprintID, blockID)
 }
-func (f *fakeBlockService) Update(ctx context.Context, sprintID, blockID uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
+func (f *fakeBlockService) Update(ctx context.Context, userID, sprintID, blockID uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
 	if f.updateFn == nil {
 		panic("unexpected Update")
 	}
-	return f.updateFn(ctx, sprintID, blockID, input)
+	return f.updateFn(ctx, userID, sprintID, blockID, input)
 }
-func (f *fakeBlockService) Delete(ctx context.Context, sprintID, blockID uuid.UUID) error {
+func (f *fakeBlockService) Delete(ctx context.Context, userID, sprintID, blockID uuid.UUID) error {
 	if f.deleteFn == nil {
 		panic("unexpected Delete")
 	}
-	return f.deleteFn(ctx, sprintID, blockID)
+	return f.deleteFn(ctx, userID, sprintID, blockID)
 }
-func (f *fakeBlockService) Reorder(ctx context.Context, sprintID uuid.UUID, ids []uuid.UUID) error {
+func (f *fakeBlockService) Reorder(ctx context.Context, userID, sprintID uuid.UUID, ids []uuid.UUID) error {
 	if f.reorderFn == nil {
 		panic("unexpected Reorder")
 	}
-	return f.reorderFn(ctx, sprintID, ids)
+	return f.reorderFn(ctx, userID, sprintID, ids)
 }
 
 func blockRequest(method, target, body string, sprintID, blockID uuid.UUID) *http.Request {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
+	r = r.WithContext(auth.WithUserID(r.Context(), defaultTestUserID))
 	r.SetPathValue("sprintID", sprintID.String())
 	if blockID != uuid.Nil {
 		r.SetPathValue("blockID", blockID.String())
@@ -71,8 +73,8 @@ func blockRequest(method, target, body string, sprintID, blockID uuid.UUID) *htt
 
 func TestSprintBlockHandlerCreate(t *testing.T) {
 	sprintID, subjectID, blockID := uuid.New(), uuid.New(), uuid.New()
-	service := &fakeBlockService{createFn: func(_ context.Context, gotSprint uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
-		if gotSprint != sprintID || input.SubjectID != subjectID || input.Position != 1 {
+	service := &fakeBlockService{createFn: func(_ context.Context, gotUser, gotSprint uuid.UUID, input CreateSprintBlockInput) (*SprintBlock, error) {
+		if gotUser != defaultTestUserID || gotSprint != sprintID || input.SubjectID != subjectID || input.Position != 1 {
 			t.Fatal("incorrect create input")
 		}
 		return &SprintBlock{ID: blockID, SprintID: sprintID, SubjectID: subjectID, Position: 1, Status: Pending}, nil
@@ -101,6 +103,7 @@ func TestSprintBlockHandlerRejectsInvalidPathIDs(t *testing.T) {
 	handler := NewSprintBlockHandler(&fakeBlockService{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request = request.WithContext(auth.WithUserID(request.Context(), defaultTestUserID))
 	request.SetPathValue("sprintID", "invalid")
 	handler.GetAll(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
@@ -109,6 +112,7 @@ func TestSprintBlockHandlerRejectsInvalidPathIDs(t *testing.T) {
 
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/", nil)
+	request = request.WithContext(auth.WithUserID(request.Context(), defaultTestUserID))
 	request.SetPathValue("sprintID", uuid.NewString())
 	request.SetPathValue("blockID", "invalid")
 	handler.GetByID(recorder, request)
@@ -133,7 +137,7 @@ func TestSprintBlockHandlerErrorMappings(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := &fakeBlockService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID) error { return test.err }}
+			service := &fakeBlockService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return test.err }}
 			recorder := httptest.NewRecorder()
 			NewSprintBlockHandler(service).Delete(recorder, blockRequest(http.MethodDelete, "/", "", uuid.New(), uuid.New()))
 			if recorder.Code != test.status {
@@ -149,7 +153,7 @@ func TestSprintBlockHandlerErrorMappings(t *testing.T) {
 func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 	sprintID, blockID := uuid.New(), uuid.New()
 	t.Run("list returns json array", func(t *testing.T) {
-		service := &fakeBlockService{getAllFn: func(context.Context, uuid.UUID) ([]SprintBlock, error) { return []SprintBlock{}, nil }}
+		service := &fakeBlockService{getAllFn: func(context.Context, uuid.UUID, uuid.UUID) ([]SprintBlock, error) { return []SprintBlock{}, nil }}
 		recorder := httptest.NewRecorder()
 		NewSprintBlockHandler(service).GetAll(recorder, blockRequest(http.MethodGet, "/", "", sprintID, uuid.Nil))
 		if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != "[]" {
@@ -157,7 +161,7 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 		}
 	})
 	t.Run("delete has no body", func(t *testing.T) {
-		service := &fakeBlockService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID) error { return nil }}
+		service := &fakeBlockService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }}
 		recorder := httptest.NewRecorder()
 		NewSprintBlockHandler(service).Delete(recorder, blockRequest(http.MethodDelete, "/", "", sprintID, blockID))
 		if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
@@ -165,14 +169,15 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 		}
 	})
 	t.Run("reorder has no body", func(t *testing.T) {
-		service := &fakeBlockService{reorderFn: func(_ context.Context, _ uuid.UUID, ids []uuid.UUID) error {
-			if len(ids) != 1 || ids[0] != blockID {
+		service := &fakeBlockService{reorderFn: func(_ context.Context, gotUser, gotSprint uuid.UUID, ids []uuid.UUID) error {
+			if gotUser != defaultTestUserID || gotSprint != sprintID || len(ids) != 1 || ids[0] != blockID {
 				t.Fatal("wrong ids")
 			}
 			return nil
 		}}
 		body := bytes.NewBufferString(`{"block_ids":["` + blockID.String() + `"]}`)
 		request := httptest.NewRequest(http.MethodPut, "/", body)
+		request = request.WithContext(auth.WithUserID(request.Context(), defaultTestUserID))
 		request.SetPathValue("sprintID", sprintID.String())
 		recorder := httptest.NewRecorder()
 		NewSprintBlockHandler(service).Reorder(recorder, request)
@@ -182,8 +187,8 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 	})
 	t.Run("patch returns updated json", func(t *testing.T) {
 		title := "updated"
-		service := &fakeBlockService{updateFn: func(_ context.Context, gotSprint, gotBlock uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
-			if gotSprint != sprintID || gotBlock != blockID || input.Title == nil || *input.Title != title {
+		service := &fakeBlockService{updateFn: func(_ context.Context, gotUser, gotSprint, gotBlock uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
+			if gotUser != defaultTestUserID || gotSprint != sprintID || gotBlock != blockID || input.Title == nil || *input.Title != title {
 				t.Fatal("wrong update input")
 			}
 			return &SprintBlock{ID: blockID, SprintID: sprintID, Title: input.Title, Status: Pending}, nil
@@ -192,6 +197,16 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 		NewSprintBlockHandler(service).Update(recorder, blockRequest(http.MethodPatch, "/", `{"title":"updated"}`, sprintID, blockID))
 		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"title":"updated"`) {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
+	t.Run("returns 401 when unauthorized", func(t *testing.T) {
+		service := &fakeBlockService{}
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.SetPathValue("sprintID", sprintID.String())
+		NewSprintBlockHandler(service).GetAll(recorder, req)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", recorder.Code)
 		}
 	})
 }

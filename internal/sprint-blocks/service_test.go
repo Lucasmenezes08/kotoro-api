@@ -86,14 +86,16 @@ func (f fakeSubjectReader) GetById(ctx context.Context, id uuid.UUID) (*subject.
 	return f.fn(ctx, id)
 }
 
+var defaultTestUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
 func creatingSprintReader() fakeSprintReader {
 	return fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
-		return &sprint.Sprint{Status: sprint.Creating}, nil
+		return &sprint.Sprint{Status: sprint.Creating, UserID: defaultTestUserID}, nil
 	}}
 }
 func existingSubjectReader() fakeSubjectReader {
 	return fakeSubjectReader{fn: func(context.Context, uuid.UUID) (*subject.Subject, error) {
-		return &subject.Subject{}, nil
+		return &subject.Subject{UserId: defaultTestUserID}, nil
 	}}
 }
 
@@ -117,7 +119,7 @@ func TestSprintBlockServiceCreate(t *testing.T) {
 		},
 	}
 	service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-	_, err := service.Create(context.Background(), sprintID, CreateSprintBlockInput{
+	_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{
 		SubjectID: subjectID, Title: &title, Position: 1, EstimatedSeconds: &estimate,
 	})
 	if err != nil {
@@ -146,7 +148,7 @@ func TestSprintBlockServiceCreateValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewSprintBlockService(&fakeBlockRepository{}, creatingSprintReader(), existingSubjectReader())
-			_, err := service.Create(context.Background(), sprintID, test.input)
+			_, err := service.Create(context.Background(), defaultTestUserID, sprintID, test.input)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
@@ -160,16 +162,16 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
 			return nil, sprint.ErrSprintNotFound
 		}}, existingSubjectReader())
-		_, err := service.Create(context.Background(), sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 		if !errors.Is(err, sprint.ErrSprintNotFound) {
 			t.Fatalf("got %v", err)
 		}
 	})
 	t.Run("sprint outside planning", func(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
-			return &sprint.Sprint{Status: sprint.InProgress}, nil
+			return &sprint.Sprint{Status: sprint.InProgress, UserID: defaultTestUserID}, nil
 		}}, existingSubjectReader())
-		_, err := service.Create(context.Background(), sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 		if !errors.Is(err, ErrSprintNotInPlanning) {
 			t.Fatalf("got %v", err)
 		}
@@ -178,7 +180,7 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, creatingSprintReader(), fakeSubjectReader{fn: func(context.Context, uuid.UUID) (*subject.Subject, error) {
 			return nil, subject.ErrSubjectNotFound
 		}})
-		_, err := service.Create(context.Background(), sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 		if !errors.Is(err, subject.ErrSubjectNotFound) {
 			t.Fatalf("got %v", err)
 		}
@@ -199,7 +201,7 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 				existsPositionFn: func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error) { return test.positionConflict, nil },
 			}
 			service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-			_, err := service.Create(context.Background(), sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+			_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 			if !errors.Is(err, test.want) {
 				t.Fatalf("expected %v, got %v", test.want, err)
 			}
@@ -219,11 +221,11 @@ func TestSprintBlockServiceReads(t *testing.T) {
 		},
 	}
 	service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-	blocks, err := service.GetAll(context.Background(), sprintID)
+	blocks, err := service.GetAll(context.Background(), defaultTestUserID, sprintID)
 	if err != nil || blocks == nil || len(blocks) != 0 {
 		t.Fatalf("expected empty slice, got %#v, %v", blocks, err)
 	}
-	block, err := service.GetByID(context.Background(), sprintID, blockID)
+	block, err := service.GetByID(context.Background(), defaultTestUserID, sprintID, blockID)
 	if err != nil || block.ID != blockID {
 		t.Fatalf("unexpected block/error: %#v %v", block, err)
 	}
@@ -233,7 +235,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 	sprintID, blockID := uuid.New(), uuid.New()
 	t.Run("empty payload", func(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, creatingSprintReader(), existingSubjectReader())
-		_, err := service.Update(context.Background(), sprintID, blockID, SprintBlockUpdateModel{})
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{})
 		if !errors.Is(err, ErrSprintBlockUpdateEmpty) {
 			t.Fatalf("got %v", err)
 		}
@@ -255,7 +257,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 			},
 		}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		_, err := service.Update(context.Background(), sprintID, blockID, SprintBlockUpdateModel{Title: &title})
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Title: &title})
 		if err != nil {
 			t.Fatalf("got %v", err)
 		}
@@ -264,7 +266,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 		position := 2
 		repo := &fakeBlockRepository{getByIDFn: func(context.Context, uuid.UUID, uuid.UUID) (*SprintBlock, error) { return nil, ErrSprintBlockNotFound }}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		_, err := service.Update(context.Background(), sprintID, blockID, SprintBlockUpdateModel{Position: &position})
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Position: &position})
 		if !errors.Is(err, ErrSprintBlockNotFound) {
 			t.Fatalf("got %v", err)
 		}
@@ -296,7 +298,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 			},
 		}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		_, err := service.Update(context.Background(), sprintID, blockID, SprintBlockUpdateModel{
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{
 			SubjectID: &subjectID, Position: &position, EstimatedSeconds: &estimate,
 		})
 		if err != nil {
@@ -310,7 +312,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 				return &SprintBlock{ID: blockID}, nil
 			}}
 			service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-			if _, err := service.Update(context.Background(), sprintID, blockID, input); err == nil {
+			if _, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, input); err == nil {
 				t.Fatal("expected validation error")
 			}
 		}
@@ -327,7 +329,7 @@ func TestSprintBlockServiceUpdate(t *testing.T) {
 			},
 		}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		_, err := service.Update(context.Background(), sprintID, blockID, SprintBlockUpdateModel{Title: &title})
+		_, err := service.Update(context.Background(), defaultTestUserID, sprintID, blockID, SprintBlockUpdateModel{Title: &title})
 		if !errors.Is(err, failure) {
 			t.Fatalf("expected wrapped failure, got %v", err)
 		}
@@ -340,7 +342,7 @@ func TestSprintBlockServiceDeleteAndReorder(t *testing.T) {
 		called := false
 		repo := &fakeBlockRepository{deleteFn: func(context.Context, uuid.UUID, uuid.UUID) error { called = true; return nil }}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		if err := service.Delete(context.Background(), sprintID, first); err != nil {
+		if err := service.Delete(context.Background(), defaultTestUserID, sprintID, first); err != nil {
 			t.Fatal(err)
 		}
 		if !called {
@@ -359,7 +361,7 @@ func TestSprintBlockServiceDeleteAndReorder(t *testing.T) {
 			},
 		}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		if err := service.Reorder(context.Background(), sprintID, []uuid.UUID{second, first}); err != nil {
+		if err := service.Reorder(context.Background(), defaultTestUserID, sprintID, []uuid.UUID{second, first}); err != nil {
 			t.Fatal(err)
 		}
 		if !called {
@@ -371,17 +373,43 @@ func TestSprintBlockServiceDeleteAndReorder(t *testing.T) {
 			return []SprintBlock{{ID: first}, {ID: second}}, nil
 		}}
 		service := NewSprintBlockService(repo, creatingSprintReader(), existingSubjectReader())
-		if err := service.Reorder(context.Background(), sprintID, ids); !errors.Is(err, ErrInvalidSprintBlockOrder) {
+		if err := service.Reorder(context.Background(), defaultTestUserID, sprintID, ids); !errors.Is(err, ErrInvalidSprintBlockOrder) {
 			t.Fatalf("expected invalid order for %#v, got %v", ids, err)
 		}
 	}
 	t.Run("rejects reorder outside planning", func(t *testing.T) {
 		reader := fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
-			return &sprint.Sprint{Status: sprint.Finished}, nil
+			return &sprint.Sprint{Status: sprint.Finished, UserID: defaultTestUserID}, nil
 		}}
 		service := NewSprintBlockService(&fakeBlockRepository{}, reader, existingSubjectReader())
-		if err := service.Reorder(context.Background(), sprintID, nil); !errors.Is(err, ErrSprintNotInPlanning) {
+		if err := service.Reorder(context.Background(), defaultTestUserID, sprintID, nil); !errors.Is(err, ErrSprintNotInPlanning) {
 			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("rejects access when sprint belongs to another user", func(t *testing.T) {
+		otherUserID := uuid.MustParse("00000000-0000-0000-0000-000000000099")
+		reader := fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.Creating, UserID: otherUserID}, nil
+		}}
+		service := NewSprintBlockService(&fakeBlockRepository{}, reader, existingSubjectReader())
+		if _, err := service.GetAll(context.Background(), defaultTestUserID, sprintID); !errors.Is(err, sprint.ErrSprintNotFound) {
+			t.Fatalf("expected ErrSprintNotFound, got %v", err)
+		}
+		if _, err := service.GetByID(context.Background(), defaultTestUserID, sprintID, first); !errors.Is(err, sprint.ErrSprintNotFound) {
+			t.Fatalf("expected ErrSprintNotFound, got %v", err)
+		}
+		if err := service.Delete(context.Background(), defaultTestUserID, sprintID, first); !errors.Is(err, sprint.ErrSprintNotFound) {
+			t.Fatalf("expected ErrSprintNotFound, got %v", err)
+		}
+	})
+	t.Run("rejects create when subject belongs to another user", func(t *testing.T) {
+		otherUserID := uuid.MustParse("00000000-0000-0000-0000-000000000099")
+		service := NewSprintBlockService(&fakeBlockRepository{}, creatingSprintReader(), fakeSubjectReader{fn: func(context.Context, uuid.UUID) (*subject.Subject, error) {
+			return &subject.Subject{UserId: otherUserID}, nil
+		}})
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: uuid.New(), Position: 1})
+		if !errors.Is(err, subject.ErrSubjectNotFound) {
+			t.Fatalf("expected ErrSubjectNotFound, got %v", err)
 		}
 	})
 }
