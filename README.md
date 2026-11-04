@@ -354,7 +354,7 @@ O comando `docker compose ps` deverá mostrar a API e o PostgreSQL em execução
 
 | Caso | Requisição | Resultado esperado |
 | --- | --- | --- |
-| Health check | `GET /healthz` | `200 OK` |
+| Health check | `GET /health` ou `GET /healthz` | `200 OK` (`"Healthy!"`) |
 | Cadastro individual | `POST /subjects` | `201 Created` |
 | Listagem | `GET /subjects` | `200 OK` e matéria cadastrada |
 | Atualização válida | `PATCH /subjects/{id}` | `200 OK` |
@@ -640,12 +640,18 @@ Os timestamps em UTC no PostgreSQL são a fonte de verdade:
 
 ### Endpoints de execução de ciclos
 
-| Método | Rota | Status de sucesso |
-| --- | --- | --- |
-| `POST` | `/sprints/{sprintID}/study-cycles/play` | `201 Created` |
-| `POST` | `/study-cycles/{cycleID}/pause` | `200 OK` |
-| `POST` | `/study-cycles/{cycleID}/resume` | `200 OK` |
-| `POST` | `/study-cycles/{cycleID}/stop` | `200 OK` |
+| Método | Rota | Status de sucesso | Descrição |
+| --- | --- | --- | --- |
+| `POST` | `/sprints/{sprintID}/study-cycles/play` | `201 Created` | Inicia um novo ciclo de estudos |
+| `POST` | `/study-cycles/{cycleID}/pause` | `200 OK` | Pausa um ciclo em andamento |
+| `POST` | `/study-cycles/{cycleID}/resume` | `200 OK` | Retoma um ciclo pausado |
+| `POST` | `/study-cycles/{cycleID}/stop` | `200 OK` | Encerra um ciclo (`concluido`, `tempo_esgotado`, `cancelado`) |
+| `GET` | `/sprints/{sprintID}/study-cycles/active` | `200 OK` / `204 No Content` | Recupera o ciclo ativo (`em_andamento` ou `pausado`) da sprint |
+| `GET` | `/sprints/{sprintID}/study-cycles` | `200 OK` | Lista todos os ciclos da sprint por número de sequência |
+
+Exemplo de recuperação de ciclo ativo (`GET /sprints/{sprintID}/study-cycles/active`):
+
+Retorna `200 OK` com o objeto `StudyCycleResponse` quando existe um ciclo `em_andamento` ou `pausado` (incluindo `elapsed_seconds`, `running_since`, `status` e `server_now`), ou `204 No Content` com corpo vazio quando não há ciclo ativo na sprint.
 
 Exemplo de início de ciclo (`Play`):
 
@@ -671,6 +677,62 @@ Content-Type: application/json
   "reason": "concluido"
 }
 ```
+
+---
+
+## Integração com Canvas e Replanejamento Contínuo
+
+Para suportar a experiência interativa do frontend (Workspace Canvas 2D e replanejamento ágil em tempo de execução):
+
+### 1. Edição de blocos futuros durante a sprint (`in_progress`)
+
+Quando uma sprint está em andamento (`sprint.status = 'in_progress'`):
+- **Blocos pendentes (`pendente`)**: permanecem totalmente editáveis, reorganizáveis, excluíveis e podem receber novas tarefas. Isso permite replanejar a rotina sem interromper o fluxo de estudos.
+- **Blocos em andamento ou finalizados (`em andamento`, `finalizado`)**: ficam protegidos contra mutações estruturais (retornando `409 Conflict`), garantindo integridade histórica e consistência métrica.
+
+### 2. Coordenadas Espaciais no Canvas (`PUT /sprints/{sprintID}/canvas-layout`)
+
+A tabela `sprint_blocks` armazena as coordenadas `x` e `y` (`DOUBLE PRECISION NOT NULL DEFAULT 0`) para posicionamento bidimensional livre no painel de visualização / Canvas.
+
+O endpoint atômico de layout atualiza posições e coordenadas espaciais em lote numa única transação:
+
+```http
+PUT /sprints/{sprintID}/canvas-layout
+Content-Type: application/json
+
+{
+  "items": [
+    { "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "position": 1, "x": 120.5, "y": 240.0 },
+    { "id": "7ca24e12-4211-4190-b1ee-1d842b11ef91", "position": 2, "x": 380.0, "y": 240.0 }
+  ]
+}
+```
+
+Resposta: `204 No Content`.
+
+*Regras de validação*:
+- Quando a sprint está em `creating`, qualquer bloco pode ter `position`, `x` e `y` alterados.
+- Quando a sprint está em `in_progress`, coordenadas `x` e `y` podem ser ajustadas livremente em qualquer bloco no Canvas, enquanto a ordem de execução (`position`) é alterável apenas para blocos pendentes.
+- A transação utiliza deslocamento temporário de posições, prevenindo colisões da constraint única `uq_sprint_blocks_sprint_position`.
+
+### 3. Conclusão autônoma de tarefas no meio do ciclo (`mid-cycle`)
+
+Tarefas podem ser marcadas como concluídas individualmente em tempo real durante o ciclo de estudos, sem necessidade de encerrar o timer:
+
+```http
+PATCH /sprints/{sprintID}/blocks/{blockID}/tasks/{taskID}
+Content-Type: application/json
+
+{
+  "status": "feita"
+}
+```
+
+- Enviar `"status": "feita"` define atomicamente `completed_at = now()`.
+- Enviar `"status": "pendente"` reabre a tarefa e define `completed_at = null`.
+- Esta alteração de status é permitida tanto em blocos `pendente` quanto no bloco `em andamento` ativo, permitindo riscar tarefas conforme o progresso do estudante.
+
+---
 
 ### Próximo passo: Transactional Outbox
 
