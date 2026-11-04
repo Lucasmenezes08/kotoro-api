@@ -18,10 +18,12 @@ import (
 )
 
 type fakeStudyCycleService struct {
-	playFn   func(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
-	pauseFn  func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
-	resumeFn func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
-	stopFn   func(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
+	playFn      func(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error)
+	pauseFn     func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	resumeFn    func(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
+	stopFn      func(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
+	getActiveFn func(ctx context.Context, userID, sprintID uuid.UUID) (*StudyCycle, error)
+	getAllFn    func(ctx context.Context, userID, sprintID uuid.UUID) ([]StudyCycle, error)
 }
 
 func (f *fakeStudyCycleService) Play(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
@@ -50,6 +52,20 @@ func (f *fakeStudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.U
 		panic("unexpected call to Stop")
 	}
 	return f.stopFn(ctx, userID, cycleID, input)
+}
+
+func (f *fakeStudyCycleService) GetActive(ctx context.Context, userID, sprintID uuid.UUID) (*StudyCycle, error) {
+	if f.getActiveFn != nil {
+		return f.getActiveFn(ctx, userID, sprintID)
+	}
+	return nil, nil
+}
+
+func (f *fakeStudyCycleService) GetAll(ctx context.Context, userID, sprintID uuid.UUID) ([]StudyCycle, error) {
+	if f.getAllFn != nil {
+		return f.getAllFn(ctx, userID, sprintID)
+	}
+	return []StudyCycle{}, nil
 }
 
 var _ StudyCycleServiceContract = (*fakeStudyCycleService)(nil)
@@ -394,6 +410,86 @@ func TestStudyCycleHandlerErrorMappings(t *testing.T) {
 		handler.Stop(rec, req)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("GetActive returns 200 OK with cycle when active cycle exists", func(t *testing.T) {
+		sprintID := uuid.New()
+		cycleID := uuid.New()
+		service := &fakeStudyCycleService{
+			getActiveFn: func(ctx context.Context, userID, sid uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{
+					ID:             cycleID,
+					SprintID:       sid,
+					Status:         StudyCycleInProgress,
+					ElapsedSeconds: 42,
+				}, nil
+			},
+		}
+		handler := NewStudyCycleHandler(service)
+		req := authReq(httptest.NewRequest(http.MethodGet, "/sprints/"+sprintID.String()+"/study-cycles/active", nil))
+		req.SetPathValue("sprintID", sprintID.String())
+		rec := httptest.NewRecorder()
+
+		handler.GetActive(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp StudyCycleResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if resp.ID != cycleID || resp.ElapsedSeconds != 42 {
+			t.Fatalf("unexpected cycle response: %#v", resp)
+		}
+	})
+
+	t.Run("GetActive returns 204 No Content when no active cycle exists", func(t *testing.T) {
+		sprintID := uuid.New()
+		service := &fakeStudyCycleService{
+			getActiveFn: func(ctx context.Context, userID, sid uuid.UUID) (*StudyCycle, error) {
+				return nil, nil
+			},
+		}
+		handler := NewStudyCycleHandler(service)
+		req := authReq(httptest.NewRequest(http.MethodGet, "/sprints/"+sprintID.String()+"/study-cycles/active", nil))
+		req.SetPathValue("sprintID", sprintID.String())
+		rec := httptest.NewRecorder()
+
+		handler.GetActive(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204, got %d", rec.Code)
+		}
+	})
+
+	t.Run("GetAll returns 200 OK with slice of cycles", func(t *testing.T) {
+		sprintID := uuid.New()
+		service := &fakeStudyCycleService{
+			getAllFn: func(ctx context.Context, userID, sid uuid.UUID) ([]StudyCycle, error) {
+				return []StudyCycle{
+					{ID: uuid.New(), SprintID: sid, SequenceNumber: 1, Status: StudyCycleFinished},
+					{ID: uuid.New(), SprintID: sid, SequenceNumber: 2, Status: StudyCycleInProgress},
+				}, nil
+			},
+		}
+		handler := NewStudyCycleHandler(service)
+		req := authReq(httptest.NewRequest(http.MethodGet, "/sprints/"+sprintID.String()+"/study-cycles", nil))
+		req.SetPathValue("sprintID", sprintID.String())
+		rec := httptest.NewRecorder()
+
+		handler.GetAll(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		var resp []StudyCycleResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if len(resp) != 2 {
+			t.Fatalf("expected 2 cycles, got %d", len(resp))
 		}
 	})
 }

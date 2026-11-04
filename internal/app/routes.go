@@ -17,6 +17,10 @@ func RegisterRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Healthy!"))
+	})
 }
 
 func RegisterAuthRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *auth.AuthMiddleware, tokenProvider auth.TokenProvider) {
@@ -88,6 +92,8 @@ func RegisterStudyCycleRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *a
 	service := studycycles.NewStudyCycleService(repository)
 	handler := studycycles.NewStudyCycleHandler(service)
 
+	mux.HandleFunc("GET /sprints/{sprintID}/study-cycles", authMiddleware.RequireAuth(handler.GetAll))
+	mux.HandleFunc("GET /sprints/{sprintID}/study-cycles/active", authMiddleware.RequireAuth(handler.GetActive))
 	mux.HandleFunc("POST /sprints/{sprintID}/study-cycles/play", authMiddleware.RequireAuth(handler.Play))
 	mux.HandleFunc("POST /study-cycles/{cycleID}/pause", authMiddleware.RequireAuth(handler.Pause))
 	mux.HandleFunc("POST /study-cycles/{cycleID}/resume", authMiddleware.RequireAuth(handler.Resume))

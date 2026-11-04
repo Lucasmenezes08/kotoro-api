@@ -17,6 +17,8 @@ type StudyCycleServiceContract interface {
 	Pause(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
 	Resume(ctx context.Context, userID, cycleID uuid.UUID) (StudyCycle, error)
 	Stop(ctx context.Context, userID, cycleID uuid.UUID, input StopStudyCycleInput) (StudyCycle, error)
+	GetActive(ctx context.Context, userID, sprintID uuid.UUID) (*StudyCycle, error)
+	GetAll(ctx context.Context, userID, sprintID uuid.UUID) ([]StudyCycle, error)
 }
 
 type StudyCycleService struct {
@@ -347,6 +349,35 @@ func selectExecutableBlock(sprintID uuid.UUID, blocks []sprintblocks.SprintBlock
 		return pendingCandidate, nil
 	}
 	return nil, ErrSprintHasNoAvailableBlock
+}
+
+func (s *StudyCycleService) GetActive(ctx context.Context, userID, sprintID uuid.UUID) (*StudyCycle, error) {
+	sp, err := s.repo.GetSprintByID(ctx, sprintID)
+	if err != nil {
+		return nil, err
+	}
+	if sp.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
+	}
+	cycle, err := s.repo.GetActiveCycleBySprintID(ctx, sprintID)
+	if err != nil {
+		if errors.Is(err, ErrStudyCycleNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return cycle, nil
+}
+
+func (s *StudyCycleService) GetAll(ctx context.Context, userID, sprintID uuid.UUID) ([]StudyCycle, error) {
+	sp, err := s.repo.GetSprintByID(ctx, sprintID)
+	if err != nil {
+		return nil, err
+	}
+	if sp.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
+	}
+	return s.repo.GetAllBySprintID(ctx, sprintID)
 }
 
 func validateSelectedTasksForBlock(blockID uuid.UUID, selectedIDs []uuid.UUID, blockTasks []blocktasks.BlockTask) error {

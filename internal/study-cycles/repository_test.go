@@ -120,6 +120,30 @@ func (r *inMemoryConcurrentRepo) GetSprintByID(_ context.Context, sprintID uuid.
 	return &copied, nil
 }
 
+func (r *inMemoryConcurrentRepo) GetActiveCycleBySprintID(_ context.Context, sprintID uuid.UUID) (*StudyCycle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.cycles {
+		if c.SprintID == sprintID && (c.Status == StudyCycleInProgress || c.Status == StudyCyclePaused) {
+			copied := c
+			return &copied, nil
+		}
+	}
+	return nil, ErrStudyCycleNotFound
+}
+
+func (r *inMemoryConcurrentRepo) GetAllBySprintID(_ context.Context, sprintID uuid.UUID) ([]StudyCycle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := make([]StudyCycle, 0)
+	for _, c := range r.cycles {
+		if c.SprintID == sprintID {
+			list = append(list, c)
+		}
+	}
+	return list, nil
+}
+
 func (r *inMemoryConcurrentRepo) PauseConditional(_ context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

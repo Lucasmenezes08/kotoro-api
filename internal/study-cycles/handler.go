@@ -171,6 +171,59 @@ func (h *StudyCycleHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	utils.WriteJson(w, http.StatusOK, responseFromModel(&cycle, h.now()))
 }
 
+func (h *StudyCycleHandler) GetActive(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
+	sprintID, ok := parseCyclePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+
+	cycle, err := h.service.GetActive(r.Context(), userID, sprintID)
+	if err != nil {
+		h.writeError(w, err, "get active study cycle")
+		return
+	}
+
+	if cycle == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	utils.WriteJson(w, http.StatusOK, responseFromModel(cycle, h.now()))
+}
+
+func (h *StudyCycleHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, studyCycleErrorResponse{Error: "Unauthorized"})
+		return
+	}
+
+	sprintID, ok := parseCyclePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+
+	cycles, err := h.service.GetAll(r.Context(), userID, sprintID)
+	if err != nil {
+		h.writeError(w, err, "get sprint study cycles")
+		return
+	}
+
+	responses := make([]StudyCycleResponse, len(cycles))
+	serverNow := h.now()
+	for i := range cycles {
+		responses[i] = responseFromModel(&cycles[i], serverNow)
+	}
+
+	utils.WriteJson(w, http.StatusOK, responses)
+}
+
 func (h *StudyCycleHandler) writeError(w http.ResponseWriter, err error, operation string) {
 	switch {
 	case errors.Is(err, ErrInvalidExecutionMode),

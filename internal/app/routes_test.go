@@ -28,6 +28,7 @@ func TestRoutes_AuthProtection(t *testing.T) {
 			path   string
 		}{
 			{http.MethodGet, "/healthz"},
+			{http.MethodGet, "/health"},
 		}
 
 		for _, p := range publicPaths {
@@ -54,6 +55,8 @@ func TestRoutes_AuthProtection(t *testing.T) {
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks"},
 			{http.MethodPost, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks"},
 			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/blocks/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/tasks"},
+			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/study-cycles"},
+			{http.MethodGet, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/study-cycles/active"},
 			{http.MethodPost, "/sprints/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/study-cycles/play"},
 			{http.MethodPost, "/study-cycles/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/pause"},
 			{http.MethodPost, "/study-cycles/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/resume"},

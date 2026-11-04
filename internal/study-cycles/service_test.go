@@ -126,14 +126,30 @@ func (f *fakeStudyCycleTxRepository) StopCycleConditional(ctx context.Context, i
 }
 
 type fakeStudyCycleRepository struct {
-	tx                  *fakeStudyCycleTxRepository
-	withinTransactionFn func(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error
-	getByIDFn           func(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
-	getSprintByIDFn     func(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error)
-	pauseConditionalFn  func(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error)
-	resumeConditionalFn func(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error)
-	committed           bool
-	rolledBack          bool
+	tx                         *fakeStudyCycleTxRepository
+	withinTransactionFn        func(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error
+	getByIDFn                  func(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
+	getSprintByIDFn            func(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error)
+	getActiveCycleBySprintIDFn func(ctx context.Context, sprintID uuid.UUID) (*StudyCycle, error)
+	getAllBySprintIDFn         func(ctx context.Context, sprintID uuid.UUID) ([]StudyCycle, error)
+	pauseConditionalFn         func(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error)
+	resumeConditionalFn        func(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error)
+	committed                  bool
+	rolledBack                 bool
+}
+
+func (f *fakeStudyCycleRepository) GetActiveCycleBySprintID(ctx context.Context, sprintID uuid.UUID) (*StudyCycle, error) {
+	if f.getActiveCycleBySprintIDFn != nil {
+		return f.getActiveCycleBySprintIDFn(ctx, sprintID)
+	}
+	return nil, ErrStudyCycleNotFound
+}
+
+func (f *fakeStudyCycleRepository) GetAllBySprintID(ctx context.Context, sprintID uuid.UUID) ([]StudyCycle, error) {
+	if f.getAllBySprintIDFn != nil {
+		return f.getAllBySprintIDFn(ctx, sprintID)
+	}
+	return []StudyCycle{}, nil
 }
 
 func (f *fakeStudyCycleRepository) GetSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
@@ -1227,4 +1243,60 @@ func TestStudyCycleServiceStop(t *testing.T) {
 			t.Fatalf("expected ErrStudyCycleNotFound, got %v", err)
 		}
 	})
+}
+
+func TestStudyCycleServiceGetActiveAndGetAll(t *testing.T) {
+	sprintID := uuid.New()
+	cycleID := uuid.New()
+	otherUserID := uuid.New()
+
+	repo := &fakeStudyCycleRepository{
+		getSprintByIDFn: func(ctx context.Context, sid uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{ID: sid, UserID: defaultTestUserID, Status: sprint.InProgress}, nil
+		},
+		getActiveCycleBySprintIDFn: func(ctx context.Context, sid uuid.UUID) (*StudyCycle, error) {
+			return &StudyCycle{ID: cycleID, SprintID: sid, Status: StudyCycleInProgress}, nil
+		},
+		getAllBySprintIDFn: func(ctx context.Context, sid uuid.UUID) ([]StudyCycle, error) {
+			return []StudyCycle{{ID: cycleID, SprintID: sid, Status: StudyCycleInProgress}}, nil
+		},
+	}
+	service := NewStudyCycleService(repo)
+
+	// Success for owner
+	active, err := service.GetActive(context.Background(), defaultTestUserID, sprintID)
+	if err != nil || active == nil || active.ID != cycleID {
+		t.Fatalf("unexpected active cycle result: %#v %v", active, err)
+	}
+
+	all, err := service.GetAll(context.Background(), defaultTestUserID, sprintID)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("unexpected all cycles result: %#v %v", all, err)
+	}
+
+	// Rejection for non-owner
+	_, err = service.GetActive(context.Background(), otherUserID, sprintID)
+	if !errors.Is(err, sprint.ErrSprintNotFound) {
+		t.Fatalf("expected ErrSprintNotFound for other user on GetActive, got %v", err)
+	}
+
+	_, err = service.GetAll(context.Background(), otherUserID, sprintID)
+	if !errors.Is(err, sprint.ErrSprintNotFound) {
+		t.Fatalf("expected ErrSprintNotFound for other user on GetAll, got %v", err)
+	}
+
+	// Returns nil, nil when no active cycle exists
+	repoEmpty := &fakeStudyCycleRepository{
+		getSprintByIDFn: func(ctx context.Context, sid uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{ID: sid, UserID: defaultTestUserID, Status: sprint.InProgress}, nil
+		},
+		getActiveCycleBySprintIDFn: func(ctx context.Context, sid uuid.UUID) (*StudyCycle, error) {
+			return nil, ErrStudyCycleNotFound
+		},
+	}
+	serviceEmpty := NewStudyCycleService(repoEmpty)
+	activeEmpty, err := serviceEmpty.GetActive(context.Background(), defaultTestUserID, sprintID)
+	if err != nil || activeEmpty != nil {
+		t.Fatalf("expected nil active cycle without error, got %#v %v", activeEmpty, err)
+	}
 }

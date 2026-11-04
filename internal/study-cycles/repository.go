@@ -43,6 +43,8 @@ type StudyCycleRepositoryContract interface {
 	WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error
 	GetByID(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
 	GetSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error)
+	GetActiveCycleBySprintID(ctx context.Context, sprintID uuid.UUID) (*StudyCycle, error)
+	GetAllBySprintID(ctx context.Context, sprintID uuid.UUID) ([]StudyCycle, error)
 	PauseConditional(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error)
 	ResumeConditional(ctx context.Context, input ResumeStudyCycleModel) (*StudyCycle, error)
 }
@@ -118,6 +120,33 @@ func (r *StudyCycleRepository) GetSprintByID(ctx context.Context, sprintID uuid.
 		return nil, fmt.Errorf("get sprint by id: %w", err)
 	}
 	return &sp, nil
+}
+
+func (r *StudyCycleRepository) GetActiveCycleBySprintID(ctx context.Context, sprintID uuid.UUID) (*StudyCycle, error) {
+	var cycle StudyCycle
+	query := `SELECT ` + studyCycleColumns + ` FROM study_cycles
+		WHERE sprint_id = $1 AND status IN ('em_andamento', 'pausado')
+		ORDER BY sequence_number DESC, started_at DESC
+		LIMIT 1`
+	err := r.db.GetContext(ctx, &cycle, query, sprintID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrStudyCycleNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get active study cycle by sprint id: %w", err)
+	}
+	return &cycle, nil
+}
+
+func (r *StudyCycleRepository) GetAllBySprintID(ctx context.Context, sprintID uuid.UUID) ([]StudyCycle, error) {
+	cycles := make([]StudyCycle, 0)
+	query := `SELECT ` + studyCycleColumns + ` FROM study_cycles
+		WHERE sprint_id = $1
+		ORDER BY sequence_number ASC, started_at ASC`
+	if err := r.db.SelectContext(ctx, &cycles, query, sprintID); err != nil {
+		return nil, fmt.Errorf("get all study cycles by sprint id: %w", err)
+	}
+	return cycles, nil
 }
 
 func (r *StudyCycleRepository) PauseConditional(ctx context.Context, input PauseStudyCycleModel) (*StudyCycle, error) {
