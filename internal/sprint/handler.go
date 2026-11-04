@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/utils"
 	"github.com/google/uuid"
 )
@@ -36,7 +37,13 @@ func NewSprintHandler(service SprintServiceContract) *SprintHandler {
 }
 
 func (h *SprintHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	sprints, err := h.service.GetAll(r.Context())
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
+	sprints, err := h.service.GetAll(r.Context(), userID)
 	if err != nil {
 		slog.Error("failed to get all sprints", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
@@ -47,28 +54,38 @@ func (h *SprintHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintHandler) GetById(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid sprint id"})
 		return
 	}
 
-	sprint, err := h.service.GetById(r.Context(), id)
+	sprint, err := h.service.GetById(r.Context(), userID, id)
 
 	switch {
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-
 	case err != nil:
 		slog.Error("failed to get sprint by id", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
-
 	default:
 		utils.WriteJson(w, http.StatusOK, sprint)
 	}
 }
 
 func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req updateSprintRequest
 
 	decoder := json.NewDecoder(r.Body)
@@ -90,56 +107,60 @@ func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Status: req.Status,
 	}
 
-	err = h.service.Update(r.Context(), id, payload)
+	err = h.service.Update(r.Context(), userID, id, payload)
 
 	switch {
 	case errors.Is(err, ErrSprintUpdateEmpty):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintNameEmpty):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintStatusInvalid):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-
 	case err != nil:
 		slog.Error("failed to update sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
-
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
 func (h *SprintHandler) DeleteById(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid sprint id"})
 		return
 	}
 
-	err = h.service.DeleteById(r.Context(), id)
+	err = h.service.DeleteById(r.Context(), userID, id)
 
 	switch {
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintDeleteStatusNotCreating):
 		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
-
 	case err != nil:
 		slog.Error("failed to delete sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
-
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req createSprintRequest
 
 	decode := json.NewDecoder(r.Body)
@@ -181,28 +202,22 @@ func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 		SprintDate: sprintDate,
 	}
 
-	err := h.service.Create(r.Context(), payload)
+	err = h.service.Create(r.Context(), userID, payload)
 
 	switch {
 	case errors.Is(err, ErrSprintAlreadyExists):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintNameEmpty):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintDateRequired):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintDateInPast):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-
 	case err != nil:
 		slog.Error("failed to create sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: err.Error()})
-
 	default:
 		w.WriteHeader(http.StatusCreated)
 	}

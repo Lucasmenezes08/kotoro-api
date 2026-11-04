@@ -22,11 +22,11 @@ var (
 )
 
 type SprintServiceContract interface {
-	Create(ctx context.Context, sprint CreateSprintModel) error
-	GetAll(ctx context.Context) ([]Sprint, error)
-	GetById(ctx context.Context, id uuid.UUID) (*Sprint, error)
-	Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
+	Create(ctx context.Context, userID uuid.UUID, sprint CreateSprintModel) error
+	GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error)
+	GetById(ctx context.Context, userID uuid.UUID, id uuid.UUID) (*Sprint, error)
+	Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, payload UpdateSprintModel) error
+	DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error
 }
 
 type SprintService struct {
@@ -39,7 +39,7 @@ func NewSprintService(repo SprintRepositoryContract) *SprintService {
 	}
 }
 
-func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) error {
+func (s *SprintService) Create(ctx context.Context, userID uuid.UUID, payload CreateSprintModel) error {
 	if payload.SprintDate.IsZero() {
 		return ErrSprintDateRequired
 	}
@@ -59,7 +59,7 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 		}
 	}
 
-	exist, err := s.repo.ExistsByDate(ctx, payload.SprintDate)
+	exist, err := s.repo.ExistsByDate(ctx, userID, payload.SprintDate)
 	if err != nil {
 		return err
 	}
@@ -69,20 +69,21 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 	}
 
 	input := CreateSprintModel{
+		UserID:     userID,
 		Name:       payload.Name,
 		SprintDate: payload.SprintDate,
 		Status:     Creating,
 	}
 
-	if sprint := s.repo.Create(ctx, input); sprint != nil {
-		return sprint
+	if err := s.repo.Create(ctx, input); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (s *SprintService) GetAll(ctx context.Context) ([]Sprint, error) {
-	sprints, err := s.repo.GetAll(ctx)
+func (s *SprintService) GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error) {
+	sprints, err := s.repo.GetAll(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("Error to get all sprints: %w", err)
 	}
@@ -90,8 +91,8 @@ func (s *SprintService) GetAll(ctx context.Context) ([]Sprint, error) {
 	return sprints, nil
 }
 
-func (s *SprintService) GetById(ctx context.Context, id uuid.UUID) (*Sprint, error) {
-	sprint, err := s.repo.GetById(ctx, id)
+func (s *SprintService) GetById(ctx context.Context, userID uuid.UUID, id uuid.UUID) (*Sprint, error) {
+	sprint, err := s.repo.GetByIdAndUser(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (s *SprintService) GetById(ctx context.Context, id uuid.UUID) (*Sprint, err
 	return sprint, nil
 }
 
-func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error {
+func (s *SprintService) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, payload UpdateSprintModel) error {
 	if payload.Name == nil && payload.Status == nil {
 		return ErrSprintUpdateEmpty
 	}
@@ -112,15 +113,15 @@ func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload Update
 		return ErrSprintStatusInvalid
 	}
 
-	if err := s.repo.Update(ctx, id, payload); err != nil {
+	if err := s.repo.Update(ctx, userID, id, payload); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
-	sprint, err := s.repo.GetById(ctx, id)
+func (s *SprintService) DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error {
+	sprint, err := s.repo.GetByIdAndUser(ctx, userID, id)
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
 		return ErrSprintDeleteStatusNotCreating
 	}
 
-	if err := s.repo.DeleteById(ctx, id); err != nil {
+	if err := s.repo.DeleteById(ctx, userID, id); err != nil {
 		return err
 	}
 
