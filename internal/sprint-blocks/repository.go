@@ -93,9 +93,12 @@ func (r *SprintBlockRepository) Update(ctx context.Context, sprintID, blockID uu
 		subject_id = COALESCE($1::uuid, subject_id), title = COALESCE($2::varchar, title),
 		position = COALESCE($3::integer, position), estimated_seconds = COALESCE($4::integer, estimated_seconds),
 		x = COALESCE($5::double precision, x), y = COALESCE($6::double precision, y),
+		status = COALESCE($7::sprint_block_status, status),
+		started_at = COALESCE($8::timestamptz, started_at),
+		completed_at = COALESCE($9::timestamptz, completed_at),
 		updated_at = now()
-		WHERE sprint_id = $7 AND id = $8 AND deleted_at IS NULL`
-	result, err := tx.ExecContext(ctx, query, input.SubjectID, input.Title, input.Position, input.EstimatedSeconds, input.X, input.Y, sprintID, blockID)
+		WHERE sprint_id = $10 AND id = $11 AND deleted_at IS NULL`
+	result, err := tx.ExecContext(ctx, query, input.SubjectID, input.Title, input.Position, input.EstimatedSeconds, input.X, input.Y, input.Status, input.StartedAt, input.CompletedAt, sprintID, blockID)
 	if err != nil {
 		return nil, translateConstraintError(err, "update sprint block")
 	}

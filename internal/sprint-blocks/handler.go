@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
@@ -31,6 +32,9 @@ type updateSprintBlockRequest struct {
 	X                *float64 `json:"x"`
 	Y                *float64 `json:"y"`
 	EstimatedSeconds *int     `json:"estimated_seconds"`
+	Status           *string  `json:"status"`
+	StartedAt        *string  `json:"started_at"`
+	CompletedAt      *string  `json:"completed_at"`
 }
 
 type canvasBlockLayoutRequest struct {
@@ -148,8 +152,32 @@ func (h *SprintBlockHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		subjectID = &parsed
 	}
+	var status *SprintBlocksStatus
+	if req.Status != nil {
+		s := SprintBlocksStatus(*req.Status)
+		status = &s
+	}
+	var startedAt *time.Time
+	if req.StartedAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.StartedAt)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid started_at format"})
+			return
+		}
+		startedAt = &parsed
+	}
+	var completedAt *time.Time
+	if req.CompletedAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.CompletedAt)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid completed_at format"})
+			return
+		}
+		completedAt = &parsed
+	}
 	block, err := h.service.Update(r.Context(), userID, sprintID, blockID, SprintBlockUpdateModel{
 		SubjectID: subjectID, Title: req.Title, Position: req.Position, X: req.X, Y: req.Y, EstimatedSeconds: req.EstimatedSeconds,
+		Status: status, StartedAt: startedAt, CompletedAt: completedAt,
 	})
 	if err != nil {
 		h.writeError(w, err, "update sprint block")
@@ -247,6 +275,8 @@ func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operat
 		errors.Is(err, ErrSprintBlockEstimatedSecondsInvalid),
 		errors.Is(err, ErrSprintBlockTitleInvalid),
 		errors.Is(err, ErrSprintBlockTitleTooLong),
+		errors.Is(err, ErrSprintBlockStatusInvalid),
+		errors.Is(err, ErrSprintBlockTimeRangeInvalid),
 		errors.Is(err, ErrInvalidSprintBlockOrder):
 		utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: err.Error()})
 	case errors.Is(err, sprint.ErrSprintNotFound),

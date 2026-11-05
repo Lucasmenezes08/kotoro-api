@@ -206,6 +206,20 @@ func TestSprintBlockHandlerResponsesAndNoContent(t *testing.T) {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
 		}
 	})
+	t.Run("patch allows concluding block with status and timestamps", func(t *testing.T) {
+		service := &fakeBlockService{updateFn: func(_ context.Context, gotUser, gotSprint, gotBlock uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
+			if input.Status == nil || *input.Status != Finished || input.StartedAt == nil || input.CompletedAt == nil {
+				t.Fatalf("wrong status/timestamps input: %#v", input)
+			}
+			return &SprintBlock{ID: blockID, SprintID: sprintID, Status: Finished, StartedAt: input.StartedAt, CompletedAt: input.CompletedAt}, nil
+		}}
+		recorder := httptest.NewRecorder()
+		payload := `{"status":"finalizado","started_at":"2026-11-05T08:00:00Z","completed_at":"2026-11-05T08:50:00Z"}`
+		NewSprintBlockHandler(service).Update(recorder, blockRequest(http.MethodPatch, "/", payload, sprintID, blockID))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"status":"finalizado"`) {
+			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
 	t.Run("update canvas layout has no body and returns 204", func(t *testing.T) {
 		called := false
 		service := &fakeBlockService{updateCanvasLayoutFn: func(_ context.Context, gotUser, gotSprint uuid.UUID, input UpdateCanvasLayoutInput) error {

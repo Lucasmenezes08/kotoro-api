@@ -52,12 +52,15 @@ type CreateSprintBlockModel struct {
 }
 
 type SprintBlockUpdateModel struct {
-	SubjectID        *uuid.UUID `db:"subject_id"`
-	Title            *string    `db:"title"`
-	Position         *int       `db:"position"`
-	X                *float64   `db:"x"`
-	Y                *float64   `db:"y"`
-	EstimatedSeconds *int       `db:"estimated_seconds"`
+	SubjectID        *uuid.UUID          `db:"subject_id"`
+	Title            *string             `db:"title"`
+	Position         *int                `db:"position"`
+	X                *float64            `db:"x"`
+	Y                *float64            `db:"y"`
+	EstimatedSeconds *int                `db:"estimated_seconds"`
+	Status           *SprintBlocksStatus `db:"status"`
+	StartedAt        *time.Time          `db:"started_at"`
+	CompletedAt      *time.Time          `db:"completed_at"`
 }
 
 type CanvasBlockLayoutItem struct {

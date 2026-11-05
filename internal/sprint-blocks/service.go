@@ -26,6 +26,8 @@ var (
 	ErrSprintNotInPlanning                = errors.New("sprint blocks can only be changed while sprint is creating")
 	ErrSprintBlockNotEditable             = errors.New("completed or in-progress sprint blocks cannot be modified")
 	ErrInvalidSprintBlockOrder            = errors.New("invalid sprint block order")
+	ErrSprintBlockStatusInvalid           = errors.New("sprint block status is invalid")
+	ErrSprintBlockTimeRangeInvalid        = errors.New("started_at must be before completed_at")
 )
 
 type sprintReader interface {
@@ -127,7 +129,7 @@ func (s *SprintBlockService) GetByID(ctx context.Context, userID, sprintID, bloc
 }
 
 func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, blockID uuid.UUID, input SprintBlockUpdateModel) (*SprintBlock, error) {
-	if input.SubjectID == nil && input.Title == nil && input.Position == nil && input.EstimatedSeconds == nil {
+	if input.SubjectID == nil && input.Title == nil && input.Position == nil && input.EstimatedSeconds == nil && input.Status == nil && input.StartedAt == nil && input.CompletedAt == nil {
 		return nil, ErrSprintBlockUpdateEmpty
 	}
 	sp, err := s.requireEditableSprint(ctx, userID, sprintID)
@@ -138,8 +140,20 @@ func (s *SprintBlockService) Update(ctx context.Context, userID, sprintID, block
 	if err != nil {
 		return nil, err
 	}
-	if sp.Status == sprint.InProgress && existingBlock.Status != Pending {
+	if sp.Status == sprint.InProgress && existingBlock.Status != Pending && input.Status == nil {
 		return nil, ErrSprintBlockNotEditable
+	}
+	if input.Status != nil {
+		switch *input.Status {
+		case Pending, InProgress, Finished:
+		default:
+			return nil, ErrSprintBlockStatusInvalid
+		}
+	}
+	if input.StartedAt != nil && input.CompletedAt != nil {
+		if !input.StartedAt.Before(*input.CompletedAt) {
+			return nil, ErrSprintBlockTimeRangeInvalid
+		}
 	}
 	if input.Title != nil {
 		title, err := normalizeTitle(input.Title)
