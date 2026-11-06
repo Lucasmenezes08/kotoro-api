@@ -17,13 +17,15 @@ type SprintHandler struct {
 }
 
 type createSprintRequest struct {
-	Name       *string `json:"name"`
-	SprintDate string  `json:"sprint_date"`
+	Name        *string `json:"name"`
+	SprintDate  string  `json:"sprint_date"`
+	RestMinutes *int    `json:"rest_minutes"`
 }
 
 type updateSprintRequest struct {
-	Name   *string       `json:"name"`
-	Status *SprintStatus `json:"status"`
+	Name        *string       `json:"name"`
+	Status      *SprintStatus `json:"status"`
+	RestMinutes *int          `json:"rest_minutes"`
 }
 
 type errorResponse struct {
@@ -103,8 +105,9 @@ func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := UpdateSprintModel{
-		Name:   req.Name,
-		Status: req.Status,
+		Name:        req.Name,
+		Status:      req.Status,
+		RestMinutes: req.RestMinutes,
 	}
 
 	err = h.service.Update(r.Context(), userID, id, payload)
@@ -113,6 +116,8 @@ func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrSprintUpdateEmpty):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintNameEmpty):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+	case errors.Is(err, ErrInvalidRestMinutes):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintStatusInvalid):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
@@ -199,9 +204,15 @@ func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	restMinutes := 10
+	if req.RestMinutes != nil {
+		restMinutes = *req.RestMinutes
+	}
+
 	payload := CreateSprintModel{
-		Name:       req.Name,
-		SprintDate: sprintDate,
+		Name:        req.Name,
+		SprintDate:  sprintDate,
+		RestMinutes: restMinutes,
 	}
 
 	err = h.service.Create(r.Context(), userID, payload)
@@ -210,6 +221,8 @@ func (h *SprintHandler) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrSprintAlreadyExists):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintNameEmpty):
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+	case errors.Is(err, ErrInvalidRestMinutes):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintDateRequired):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})

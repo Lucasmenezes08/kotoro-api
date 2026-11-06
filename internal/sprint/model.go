@@ -20,6 +20,7 @@ type Sprint struct {
 	UserID      uuid.UUID    `db:"user_id" json:"user_id"`
 	Name        *string      `db:"name" json:"name"`
 	SprintDate  time.Time    `db:"sprint_date" json:"sprint_date"`
+	RestMinutes int          `db:"rest_minutes" json:"rest_minutes"`
 	Status      SprintStatus `db:"status" json:"status"`
 	StartedAt   *time.Time   `db:"started_at" json:"started_at"`
 	CompletedAt *time.Time   `db:"completed_at" json:"completed_at"`

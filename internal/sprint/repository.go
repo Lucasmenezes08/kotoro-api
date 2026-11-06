@@ -28,15 +28,17 @@ type SprintCreateInput struct {
 }
 
 type CreateSprintModel struct {
-	UserID     uuid.UUID    `db:"user_id"`
-	Name       *string      `db:"name"`
-	SprintDate time.Time    `db:"sprint_date"`
-	Status     SprintStatus `db:"status"`
+	UserID      uuid.UUID    `db:"user_id"`
+	Name        *string      `db:"name"`
+	SprintDate  time.Time    `db:"sprint_date"`
+	RestMinutes int          `db:"rest_minutes"`
+	Status      SprintStatus `db:"status"`
 }
 
 type UpdateSprintModel struct {
-	Name   *string       `db:"name"`
-	Status *SprintStatus `db:"status"`
+	Name        *string       `db:"name"`
+	Status      *SprintStatus `db:"status"`
+	RestMinutes *int          `db:"rest_minutes"`
 }
 
 type SprintRepository struct {
@@ -50,7 +52,7 @@ func NewSprintRepository(db *sqlx.DB) *SprintRepository {
 }
 
 func (r *SprintRepository) Create(ctx context.Context, sprint CreateSprintModel) error {
-	query := "INSERT INTO sprints (user_id, name, sprint_date, status) VALUES(:user_id, :name, :sprint_date, :status)"
+	query := "INSERT INTO sprints (user_id, name, sprint_date, rest_minutes, status) VALUES(:user_id, :name, :sprint_date, :rest_minutes, :status)"
 
 	_, err := r.db.NamedExecContext(ctx, query, sprint)
 
@@ -74,6 +76,7 @@ func (r *SprintRepository) GetAll(ctx context.Context, userID uuid.UUID) ([]Spri
 			user_id,
 			name,
 			sprint_date,
+			rest_minutes,
 			status,
 			started_at,
 			completed_at,
@@ -101,6 +104,7 @@ func (r *SprintRepository) GetById(ctx context.Context, id uuid.UUID) (*Sprint, 
 			user_id,
 			name,
 			sprint_date,
+			rest_minutes,
 			status,
 			started_at,
 			completed_at,
@@ -133,6 +137,7 @@ func (r *SprintRepository) GetByIdAndUser(ctx context.Context, userID, id uuid.U
 			user_id,
 			name,
 			sprint_date,
+			rest_minutes,
 			status,
 			started_at,
 			completed_at,
@@ -159,11 +164,14 @@ func (r *SprintRepository) GetByIdAndUser(ctx context.Context, userID, id uuid.U
 func (r *SprintRepository) Update(ctx context.Context, userID, id uuid.UUID, payload UpdateSprintModel) error {
 	query := `
 		UPDATE sprints
-		SET name = COALESCE($1::varchar, name), status = COALESCE($2::sprint_status, status), updated_at = now()
-		WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL
+		SET name = COALESCE($1::varchar, name),
+		    status = COALESCE($2::sprint_status, status),
+		    rest_minutes = COALESCE($3::integer, rest_minutes),
+		    updated_at = now()
+		WHERE id = $4 AND user_id = $5 AND deleted_at IS NULL
 	`
 
-	result, err := r.db.ExecContext(ctx, query, payload.Name, payload.Status, id, userID)
+	result, err := r.db.ExecContext(ctx, query, payload.Name, payload.Status, payload.RestMinutes, id, userID)
 	if err != nil {
 		return fmt.Errorf("Error to update sprint: %w", err)
 	}

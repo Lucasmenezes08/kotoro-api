@@ -1047,4 +1047,101 @@ func TestSprintServiceDeleteById(t *testing.T) {
 			t.Fatalf("expected ErrSprintNotFound, got %v", err)
 		}
 	})
+
+	t.Run("creates sprint with custom and default rest minutes", func(t *testing.T) {
+		var captured CreateSprintModel
+		repo := &fakeSprintRepository{
+			existsByDateFn: func(ctx context.Context, date time.Time) (bool, error) {
+				return false, nil
+			},
+			createFn: func(ctx context.Context, payload CreateSprintModel) error {
+				captured = payload
+				return nil
+			},
+		}
+
+		service := NewSprintService(repo)
+		futureDate := time.Now().AddDate(0, 0, 1)
+
+		// 0 defaults to 10
+		err := service.Create(context.Background(), defaultTestUserID, CreateSprintModel{
+			SprintDate:  futureDate,
+			RestMinutes: 0,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured.RestMinutes != 10 {
+			t.Fatalf("expected RestMinutes=10, got %d", captured.RestMinutes)
+		}
+
+		// custom rest minutes within 1-120
+		err = service.Create(context.Background(), defaultTestUserID, CreateSprintModel{
+			SprintDate:  futureDate,
+			RestMinutes: 25,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured.RestMinutes != 25 {
+			t.Fatalf("expected RestMinutes=25, got %d", captured.RestMinutes)
+		}
+
+		// > 120 returns ErrInvalidRestMinutes
+		err = service.Create(context.Background(), defaultTestUserID, CreateSprintModel{
+			SprintDate:  futureDate,
+			RestMinutes: 121,
+		})
+		if !errors.Is(err, ErrInvalidRestMinutes) {
+			t.Fatalf("expected ErrInvalidRestMinutes, got %v", err)
+		}
+	})
+
+	t.Run("updates sprint rest minutes with validation", func(t *testing.T) {
+		id := uuid.New()
+		var captured UpdateSprintModel
+		repo := &fakeSprintRepository{
+			getByIdFn: func(ctx context.Context, receivedID uuid.UUID) (*Sprint, error) {
+				return &Sprint{
+					ID:         id,
+					UserID:     defaultTestUserID,
+					Status:     Creating,
+					SprintDate: time.Now().AddDate(0, 0, 1),
+				}, nil
+			},
+			updateFn: func(ctx context.Context, receivedID uuid.UUID, payload UpdateSprintModel) error {
+				captured = payload
+				return nil
+			},
+		}
+
+		service := NewSprintService(repo)
+
+		invalidRest := 0
+		err := service.Update(context.Background(), defaultTestUserID, id, UpdateSprintModel{
+			RestMinutes: &invalidRest,
+		})
+		if !errors.Is(err, ErrInvalidRestMinutes) {
+			t.Fatalf("expected ErrInvalidRestMinutes, got %v", err)
+		}
+
+		tooHighRest := 150
+		err = service.Update(context.Background(), defaultTestUserID, id, UpdateSprintModel{
+			RestMinutes: &tooHighRest,
+		})
+		if !errors.Is(err, ErrInvalidRestMinutes) {
+			t.Fatalf("expected ErrInvalidRestMinutes, got %v", err)
+		}
+
+		validRest := 15
+		err = service.Update(context.Background(), defaultTestUserID, id, UpdateSprintModel{
+			RestMinutes: &validRest,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured.RestMinutes == nil || *captured.RestMinutes != 15 {
+			t.Fatalf("expected RestMinutes=15, got %v", captured.RestMinutes)
+		}
+	})
 }

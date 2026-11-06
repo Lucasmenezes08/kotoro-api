@@ -20,6 +20,7 @@ var (
 	ErrSprintDateRequired            error = errors.New("sprint date is required")
 	ErrSprintDeleteStatusNotCreating error = errors.New("Sprint can only be deleted while its status is 'creating'")
 	ErrSprintNotEditable             error = errors.New("sprint is not editable; actions can only be performed on planning or in-progress sprints from today or future")
+	ErrInvalidRestMinutes            error = errors.New("rest_minutes must be between 1 and 120")
 )
 
 type SprintServiceContract interface {
@@ -69,11 +70,20 @@ func (s *SprintService) Create(ctx context.Context, userID uuid.UUID, payload Cr
 		return ErrSprintAlreadyExists
 	}
 
+	restMinutes := payload.RestMinutes
+	if restMinutes <= 0 {
+		restMinutes = 10
+	}
+	if restMinutes > 120 {
+		return ErrInvalidRestMinutes
+	}
+
 	input := CreateSprintModel{
-		UserID:     userID,
-		Name:       payload.Name,
-		SprintDate: payload.SprintDate,
-		Status:     Creating,
+		UserID:      userID,
+		Name:        payload.Name,
+		SprintDate:  payload.SprintDate,
+		RestMinutes: restMinutes,
+		Status:      Creating,
 	}
 
 	if err := s.repo.Create(ctx, input); err != nil {
@@ -102,12 +112,18 @@ func (s *SprintService) GetById(ctx context.Context, userID uuid.UUID, id uuid.U
 }
 
 func (s *SprintService) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, payload UpdateSprintModel) error {
-	if payload.Name == nil && payload.Status == nil {
+	if payload.Name == nil && payload.Status == nil && payload.RestMinutes == nil {
 		return ErrSprintUpdateEmpty
 	}
 
 	if payload.Name != nil && strings.TrimSpace(*payload.Name) == "" {
 		return ErrSprintNameEmpty
+	}
+
+	if payload.RestMinutes != nil {
+		if *payload.RestMinutes <= 0 || *payload.RestMinutes > 120 {
+			return ErrInvalidRestMinutes
+		}
 	}
 
 	if payload.Status != nil && !validSprintStatus(*payload.Status) {
