@@ -14,11 +14,12 @@ import (
 
 type SprintRepositoryContract interface {
 	Create(ctx context.Context, payload CreateSprintModel) error
-	GetAll(ctx context.Context) ([]Sprint, error)
+	GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error)
 	GetById(ctx context.Context, id uuid.UUID) (*Sprint, error)
-	Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
-	ExistsByDate(ctx context.Context, date time.Time) (bool, error)
+	GetByIdAndUser(ctx context.Context, userID, id uuid.UUID) (*Sprint, error)
+	Update(ctx context.Context, userID, id uuid.UUID, payload UpdateSprintModel) error
+	DeleteById(ctx context.Context, userID, id uuid.UUID) error
+	ExistsByDate(ctx context.Context, userID uuid.UUID, date time.Time) (bool, error)
 }
 
 type SprintCreateInput struct {
@@ -27,6 +28,7 @@ type SprintCreateInput struct {
 }
 
 type CreateSprintModel struct {
+	UserID     uuid.UUID    `db:"user_id"`
 	Name       *string      `db:"name"`
 	SprintDate time.Time    `db:"sprint_date"`
 	Status     SprintStatus `db:"status"`
@@ -48,13 +50,13 @@ func NewSprintRepository(db *sqlx.DB) *SprintRepository {
 }
 
 func (r *SprintRepository) Create(ctx context.Context, sprint CreateSprintModel) error {
-	query := "INSERT INTO sprints (name, sprint_date, status) VALUES(:name, :sprint_date, :status)"
+	query := "INSERT INTO sprints (user_id, name, sprint_date, status) VALUES(:user_id, :name, :sprint_date, :status)"
 
 	_, err := r.db.NamedExecContext(ctx, query, sprint)
 
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_sprint_active_date" {
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && (pgErr.ConstraintName == "idx_sprint_active_user_date" || pgErr.ConstraintName == "idx_sprint_active_date") {
 			return ErrSprintAlreadyExists
 		}
 		return fmt.Errorf("Error to create Sprint: %w", err)
@@ -63,12 +65,13 @@ func (r *SprintRepository) Create(ctx context.Context, sprint CreateSprintModel)
 	return nil
 }
 
-func (r *SprintRepository) GetAll(ctx context.Context) ([]Sprint, error) {
+func (r *SprintRepository) GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error) {
 	sprints := make([]Sprint, 0)
 
 	query := `
 		SELECT
 			id,
+			user_id,
 			name,
 			sprint_date,
 			status,
@@ -78,11 +81,11 @@ func (r *SprintRepository) GetAll(ctx context.Context) ([]Sprint, error) {
 			updated_at,
 			deleted_at
 		FROM sprints
-		WHERE deleted_at IS NULL
+		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC, id DESC
 	`
 
-	if err := r.db.SelectContext(ctx, &sprints, query); err != nil {
+	if err := r.db.SelectContext(ctx, &sprints, query, userID); err != nil {
 		return nil, fmt.Errorf("Error to get all sprints: %w", err)
 	}
 
@@ -95,6 +98,7 @@ func (r *SprintRepository) GetById(ctx context.Context, id uuid.UUID) (*Sprint, 
 	query := `
 		SELECT
 			id,
+			user_id,
 			name,
 			sprint_date,
 			status,
@@ -120,10 +124,46 @@ func (r *SprintRepository) GetById(ctx context.Context, id uuid.UUID) (*Sprint, 
 	return &sprint, nil
 }
 
-func (r *SprintRepository) Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error {
-	query := "UPDATE sprints SET name = COALESCE($1::varchar, name), status = COALESCE($2::sprint_status, status), updated_at = now() WHERE id = $3 AND deleted_at IS NULL"
+func (r *SprintRepository) GetByIdAndUser(ctx context.Context, userID, id uuid.UUID) (*Sprint, error) {
+	var sprint Sprint
 
-	result, err := r.db.ExecContext(ctx, query, payload.Name, payload.Status, id)
+	query := `
+		SELECT
+			id,
+			user_id,
+			name,
+			sprint_date,
+			status,
+			started_at,
+			completed_at,
+			created_at,
+			updated_at,
+			deleted_at
+		FROM sprints
+		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+		LIMIT 1
+	`
+
+	err := r.db.GetContext(ctx, &sprint, query, id, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSprintNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("Error to get sprint by id and user: %w", err)
+	}
+
+	return &sprint, nil
+}
+
+func (r *SprintRepository) Update(ctx context.Context, userID, id uuid.UUID, payload UpdateSprintModel) error {
+	query := `
+		UPDATE sprints
+		SET name = COALESCE($1::varchar, name), status = COALESCE($2::sprint_status, status), updated_at = now()
+		WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL
+	`
+
+	result, err := r.db.ExecContext(ctx, query, payload.Name, payload.Status, id, userID)
 	if err != nil {
 		return fmt.Errorf("Error to update sprint: %w", err)
 	}
@@ -140,27 +180,30 @@ func (r *SprintRepository) Update(ctx context.Context, id uuid.UUID, payload Upd
 	return nil
 }
 
-func (r *SprintRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
+func (r *SprintRepository) DeleteById(ctx context.Context, userID, id uuid.UUID) error {
 	query := `
 		UPDATE sprints
 		SET deleted_at = now(), updated_at = now()
 		WHERE id = $1
+			AND user_id = $2
 			AND deleted_at IS NULL
-			AND status = $2::sprint_status
+			AND status = $3::sprint_status
 		RETURNING id
 	`
 
 	var deletedID uuid.UUID
 
-	err := r.db.GetContext(ctx, &deletedID, query, id, Creating)
+	err := r.db.GetContext(ctx, &deletedID, query, id, userID, Creating)
 	if errors.Is(err, sql.ErrNoRows) {
-		_, getErr := r.GetById(ctx, id)
+		sp, getErr := r.GetById(ctx, id)
 
 		switch {
 		case errors.Is(getErr, ErrSprintNotFound):
 			return ErrSprintNotFound
 		case getErr != nil:
 			return fmt.Errorf("Error to check sprint after delete: %w", getErr)
+		case sp.UserID != userID:
+			return ErrSprintNotFound
 		default:
 			return ErrSprintDeleteStatusNotCreating
 		}
@@ -173,12 +216,12 @@ func (r *SprintRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (r *SprintRepository) ExistsByDate(ctx context.Context, date time.Time) (bool, error) {
-	query := "SELECT EXISTS (SELECT 1 FROM sprints WHERE sprint_date = $1::date AND deleted_at IS NULL)"
+func (r *SprintRepository) ExistsByDate(ctx context.Context, userID uuid.UUID, date time.Time) (bool, error) {
+	query := "SELECT EXISTS (SELECT 1 FROM sprints WHERE user_id = $1 AND sprint_date = $2::date AND deleted_at IS NULL)"
 
 	var exists bool
 
-	err := r.db.GetContext(ctx, &exists, query, date)
+	err := r.db.GetContext(ctx, &exists, query, userID, date)
 	if err != nil {
 		return false, fmt.Errorf("Error to get sprint_date exists: %w", err)
 	}

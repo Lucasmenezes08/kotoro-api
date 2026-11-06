@@ -354,7 +354,7 @@ O comando `docker compose ps` deverá mostrar a API e o PostgreSQL em execução
 
 | Caso | Requisição | Resultado esperado |
 | --- | --- | --- |
-| Health check | `GET /healthz` | `200 OK` |
+| Health check | `GET /health` ou `GET /healthz` | `200 OK` (`"Healthy!"`) |
 | Cadastro individual | `POST /subjects` | `201 Created` |
 | Listagem | `GET /subjects` | `200 OK` e matéria cadastrada |
 | Atualização válida | `PATCH /subjects/{id}` | `200 OK` |
@@ -515,12 +515,233 @@ A inteligência artificial foi utilizada como ferramenta de apoio para revisão 
 | Consistência | Uso futuro de publisher confirms, ack manual, idempotência, retry e DLQ |
 | Cronômetros | Persistência por timestamps em vez de goroutines permanentes |
 
-## Limitações conhecidas da primeira entrega
+## Autenticação e Multi-tenancy (`auth`)
 
-- o sistema ainda não possui autenticação ou isolamento por usuário;
-- as sprints e os ciclos ainda fazem parte do roadmap;
-- RabbitMQ e Transactional Outbox ainda pertencem à arquitetura-alvo;
-- o número de workers ainda é um limite fixo;
+A API conta com um módulo completo de autenticação e isolamento de dados por usuário (*multi-tenancy* lógico).
+
+### Modelo de Segurança
+
+- **Hashing de Senha**: Senhas são processadas de forma irreversível utilizando `bcrypt` com custo computacional seguro (custo 12).
+- **Tokens JWT**: Sessões *stateless* via tokens assinados com HMAC-SHA256 (`golang-jwt/jwt/v5`), contendo `user_id`, `email` e prazo de expiração (padrão de 24 horas).
+- **Middleware de Autenticação**: Valida o cabeçalho HTTP `Authorization: Bearer <token>` e injeta o identificador seguro do usuário (`uuid.UUID`) no `context.Context` de cada requisição.
+- **Isolamento de Dados**:
+  - Matérias (`subjects`) e sprints (`sprints`) possuem chave estrangeira `user_id` não nula referenciando `users(id)`.
+  - Blocos de sprint (`sprint_block`), tarefas (`block_tasks`) e ciclos de estudo (`study_cycles`) são validados contra a posse da sprint pelo usuário autenticado, impedindo acesso indevido ou vazamento de dados entre estudantes.
+  - Tentativas de acesso a recursos de outro usuário resultam em `404 Not Found` para evitar enumeração de recursos de outros usuários.
+
+### Endpoints de Autenticação
+
+| Método | Rota | Autenticação | Descrição |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | Pública | Cadastra um novo usuário com `name`, `email` e `password` (mínimo 8 caracteres) |
+| `POST` | `/auth/login` | Pública | Autentica com `email` e `password`, retornando o token JWT e dados do usuário |
+| `GET` | `/auth/me` | Bearer Token | Retorna os dados do usuário autenticado a partir do token |
+
+Exemplo de cadastro (`POST /auth/register`):
+
+```http
+POST /auth/register
+Content-Type: application/json
+
+{
+  "name": "Lucas Menezes",
+  "email": "lucas@example.com",
+  "password": "senhaSegura123"
+}
+```
+
+Resposta (`201 Created`):
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "c379a04a-8745-42d4-a7fc-2e6b7fc5ef02",
+    "name": "Lucas Menezes",
+    "email": "lucas@example.com",
+    "created_at": "2026-11-04T12:00:00Z",
+    "updated_at": "2026-11-04T12:00:00Z"
+  }
+}
+```
+
+Exemplo de login (`POST /auth/login`):
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "lucas@example.com",
+  "password": "senhaSegura123"
+}
+```
+
+Para acessar qualquer endpoint protegido da aplicação, inclua o cabeçalho:
+
+```http
+Authorization: Bearer <token>
+```
+
+---
+
+## Execução de ciclos de estudo (`study-cycles`)
+
+A fase de execução de uma sprint ocorre por meio de ciclos de estudo (`study_cycles`), que controlam o tempo efetivamente estudado em cada bloco ou conjunto de tarefas sem manter goroutines ou timers em memória por sessão.
+
+### Máquina de estados do ciclo
+
+Status possíveis (`status`):
+
+- `em_andamento`
+- `pausado`
+- `finalizado`
+- `cancelado`
+
+Motivos terminais de encerramento (`cycle_stop_reason`):
+
+- `concluido` → `finalizado`
+- `tempo_esgotado` → `finalizado`
+- `cancelado` → `cancelado`
+
+```mermaid
+stateDiagram-v2
+    [*] --> em_andamento: Play
+    em_andamento --> pausado: Pause
+    pausado --> em_andamento: Resume
+    em_andamento --> finalizado: Stop (concluido | tempo_esgotado)
+    pausado --> finalizado: Stop (concluido | tempo_esgotado)
+    em_andamento --> cancelado: Stop (cancelado)
+    pausado --> cancelado: Stop (cancelado)
+```
+
+Pausar (`pause`) não é um motivo terminal de parada: o ciclo permanece aberto com status `pausado` para posterior retomada (`resume`) mantendo o mesmo `sequence_number`.
+
+### Modelo de tempo
+
+Os timestamps em UTC no PostgreSQL são a fonte de verdade:
+
+- `started_at`: instante em que o ciclo foi iniciado pela primeira vez;
+- `running_since`: início do segmento em execução atual (`null` quando pausado ou encerrado);
+- `paused_at`: instante da pausa mais recente (`null` quando em execução);
+- `ended_at`: instante de encerramento terminal (`finalizado` ou `cancelado`);
+- `elapsed_seconds`: soma consolidada dos intervalos já executados;
+- `planned_duration_seconds`: duração configurada quando `timer_type = temporizado`;
+- `server_now`: horário atual do servidor retornado nas respostas HTTP para sincronização visual no frontend.
+
+### Fronteiras transacionais e concorrência
+
+| Operação | Estratégia de persistência e sincronização |
+| --- | --- |
+| `Play` | Transação curta (`BEGIN ... COMMIT`): bloqueia a sprint (`SELECT ... FOR UPDATE`), valida status `in_progress`, verifica inexistência de ciclo ativo, seleciona e bloqueia o bloco elegível por `position`, calcula `sequence_number`, insere o ciclo, associa `study_cycle_tasks` e atualiza o bloco de `pendente` para `em andamento`. Protegido também pelos índices únicos `uq_study_cycles_active_sprint` e `uq_study_cycles_sprint_sequence`. |
+| `Pause` | Atualização condicional atômica (`UPDATE study_cycles ... WHERE id = $1 AND status = 'em_andamento' RETURNING ...`), consolidando `elapsed_seconds` sem abrir transação explícita. |
+| `Resume` | Atualização condicional atômica (`UPDATE study_cycles ... WHERE id = $1 AND status = 'pausado' RETURNING ...`), preservando `started_at` e `elapsed_seconds`. |
+| `Stop` | Transação curta (`BEGIN ... COMMIT`): bloqueia o ciclo (`FOR UPDATE`), consolida o último intervalo se estava `em_andamento`, aplica o status terminal e, quando `reason = concluido`, conclui as tarefas selecionadas (`feita`) e finaliza o bloco (`finalizado`) quando todas as tarefas ativas atingem estado terminal. |
+
+### Endpoints de execução de ciclos
+
+| Método | Rota | Status de sucesso | Descrição |
+| --- | --- | --- | --- |
+| `POST` | `/sprints/{sprintID}/study-cycles/play` | `201 Created` | Inicia um novo ciclo de estudos |
+| `POST` | `/study-cycles/{cycleID}/pause` | `200 OK` | Pausa um ciclo em andamento |
+| `POST` | `/study-cycles/{cycleID}/resume` | `200 OK` | Retoma um ciclo pausado |
+| `POST` | `/study-cycles/{cycleID}/stop` | `200 OK` | Encerra um ciclo (`concluido`, `tempo_esgotado`, `cancelado`) |
+| `GET` | `/sprints/{sprintID}/study-cycles/active` | `200 OK` / `204 No Content` | Recupera o ciclo ativo (`em_andamento` ou `pausado`) da sprint |
+| `GET` | `/sprints/{sprintID}/study-cycles` | `200 OK` | Lista todos os ciclos da sprint por número de sequência |
+
+Exemplo de recuperação de ciclo ativo (`GET /sprints/{sprintID}/study-cycles/active`):
+
+Retorna `200 OK` com o objeto `StudyCycleResponse` quando existe um ciclo `em_andamento` ou `pausado` (incluindo `elapsed_seconds`, `running_since`, `status` e `server_now`), ou `204 No Content` com corpo vazio quando não há ciclo ativo na sprint.
+
+Exemplo de início de ciclo (`Play`):
+
+```http
+POST /sprints/{sprintID}/study-cycles/play
+Content-Type: application/json
+
+{
+  "execution_mode": "bloco_materia",
+  "timer_type": "cronometro_livre",
+  "planned_duration_seconds": null,
+  "block_task_ids": []
+}
+```
+
+Exemplo de encerramento de ciclo (`Stop`):
+
+```http
+POST /study-cycles/{cycleID}/stop
+Content-Type: application/json
+
+{
+  "reason": "concluido"
+}
+```
+
+---
+
+## Integração com Canvas e Replanejamento Contínuo
+
+Para suportar a experiência interativa do frontend (Workspace Canvas 2D e replanejamento ágil em tempo de execução):
+
+### 1. Edição de blocos futuros durante a sprint (`in_progress`)
+
+Quando uma sprint está em andamento (`sprint.status = 'in_progress'`):
+- **Blocos pendentes (`pendente`)**: permanecem totalmente editáveis, reorganizáveis, excluíveis e podem receber novas tarefas. Isso permite replanejar a rotina sem interromper o fluxo de estudos.
+- **Blocos em andamento ou finalizados (`em andamento`, `finalizado`)**: ficam protegidos contra mutações estruturais (retornando `409 Conflict`), garantindo integridade histórica e consistência métrica.
+
+### 2. Coordenadas Espaciais no Canvas (`PUT /sprints/{sprintID}/canvas-layout`)
+
+A tabela `sprint_blocks` armazena as coordenadas `x` e `y` (`DOUBLE PRECISION NOT NULL DEFAULT 0`) para posicionamento bidimensional livre no painel de visualização / Canvas.
+
+O endpoint atômico de layout atualiza posições e coordenadas espaciais em lote numa única transação:
+
+```http
+PUT /sprints/{sprintID}/canvas-layout
+Content-Type: application/json
+
+{
+  "items": [
+    { "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "position": 1, "x": 120.5, "y": 240.0 },
+    { "id": "7ca24e12-4211-4190-b1ee-1d842b11ef91", "position": 2, "x": 380.0, "y": 240.0 }
+  ]
+}
+```
+
+Resposta: `204 No Content`.
+
+*Regras de validação*:
+- Quando a sprint está em `creating`, qualquer bloco pode ter `position`, `x` e `y` alterados.
+- Quando a sprint está em `in_progress`, coordenadas `x` e `y` podem ser ajustadas livremente em qualquer bloco no Canvas, enquanto a ordem de execução (`position`) é alterável apenas para blocos pendentes.
+- A transação utiliza deslocamento temporário de posições, prevenindo colisões da constraint única `uq_sprint_blocks_sprint_position`.
+
+### 3. Conclusão autônoma de tarefas no meio do ciclo (`mid-cycle`)
+
+Tarefas podem ser marcadas como concluídas individualmente em tempo real durante o ciclo de estudos, sem necessidade de encerrar o timer:
+
+```http
+PATCH /sprints/{sprintID}/blocks/{blockID}/tasks/{taskID}
+Content-Type: application/json
+
+{
+  "status": "feita"
+}
+```
+
+- Enviar `"status": "feita"` define atomicamente `completed_at = now()`.
+- Enviar `"status": "pendente"` reabre a tarefa e define `completed_at = null`.
+- Esta alteração de status é permitida tanto em blocos `pendente` quanto no bloco `em andamento` ativo, permitindo riscar tarefas conforme o progresso do estudante.
+
+---
+
+### Próximo passo: Transactional Outbox
+
+A transação de `Stop` já delimita a fronteira atômica onde os registros da tabela `outbox_events` (como `study_cycle.finished` e `block_task.completed`) serão inseridos na mesma transação do PostgreSQL antes da publicação assíncrona pelo Outbox Relay no RabbitMQ.
+
+## Limitações conhecidas e próximos passos
+
+- RabbitMQ e Transactional Outbox pertencem à arquitetura-alvo da próxima etapa de mensageria;
+- o número de workers na importação em lote ainda é um limite fixo;
 - a recuperação de ações executadas totalmente offline ainda não está implementada;
 - a disponibilidade do PostgreSQL continua sendo necessária para operações de escrita;
-- a restrição definitiva para nomes duplicados precisa estar coerente entre service e banco.
+- a restrição definitiva para nomes duplicados está alinhada por usuário entre service e banco.

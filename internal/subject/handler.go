@@ -7,17 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/utils"
 	"github.com/google/uuid"
 )
-
-type SubjectServiceContract interface {
-	Create(ctx context.Context, subject SubjectCreateInput) error
-	GetAll(ctx context.Context) ([]Subject, error)
-	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
-	CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
-}
 
 type SubjectController struct {
 	service SubjectServiceContract
@@ -55,11 +48,15 @@ type errorResponse struct {
 }
 
 func (c *SubjectController) GetAll(w http.ResponseWriter, r *http.Request) {
-	sub, err := c.service.GetAll(r.Context())
+	userID, err := auth.GetUserIDFromContext(r.Context())
 	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
 
+	sub, err := c.service.GetAll(r.Context(), userID)
+	if err != nil {
 		slog.Error("Error to get all subjects", "Error", err)
-
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
 		return
 	}
@@ -68,6 +65,12 @@ func (c *SubjectController) GetAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req createSubjectRequest
 
 	decoder := json.NewDecoder(r.Body)
@@ -83,23 +86,19 @@ func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
 		Color: req.Color,
 	}
 
-	err := c.service.Create(r.Context(), input)
+	err = c.service.Create(r.Context(), userID, input)
 
 	switch {
 	case errors.Is(err, ErrSubjectRequiredName):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Subject name is required"})
-
 	case errors.Is(err, ErrSubjectRequiredColor):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Subject color is required"})
-
 	case errors.Is(err, ErrSubjectInvalidColor):
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "invalid Subject color"})
-
 	case errors.Is(err, ErrSubjectDuplicated):
 		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
 	case err != nil:
 		slog.Error("failed to create subject", "error", err)
-
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{
 			Error: "internal server error",
 		})
@@ -109,6 +108,12 @@ func (c *SubjectController) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req updateSubjectRequest
 
 	decode := json.NewDecoder(r.Body)
@@ -125,14 +130,13 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pathId := r.PathValue("id")
-
 	id, err := uuid.Parse(pathId)
 	if err != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
 		return
 	}
 
-	update := c.service.Update(r.Context(), id, input)
+	update := c.service.Update(r.Context(), userID, id, input)
 
 	switch {
 	case errors.Is(update, ErrSubjectUpdateEmpty):
@@ -149,7 +153,6 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
 		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: update.Error()})
 	case update != nil:
 		slog.Error("failed to update subject", "error", update)
-
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{
 			Error: "internal server error",
 		})
@@ -159,17 +162,20 @@ func (c *SubjectController) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *SubjectController) DeleteById(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
 
 	pathId := r.PathValue("id")
-
 	param, errParse := uuid.Parse(pathId)
 	if errParse != nil {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "Invalid subject id"})
 		return
 	}
 
-	err := c.service.DeleteById(r.Context(), param)
-
+	err = c.service.DeleteById(r.Context(), userID, param)
 	if err != nil {
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
 		return
@@ -178,114 +184,60 @@ func (c *SubjectController) DeleteById(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (c *SubjectController) CreateBatch(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
+func (c *SubjectController) CreateBatch(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
+		return
+	}
+
 	var req createSubjectBatchRequest
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&req); err != nil {
-		utils.WriteJson(
-			w,
-			http.StatusBadRequest,
-			errorResponse{
-				Error: "invalid request body",
-			},
-		)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "invalid request body"})
 		return
 	}
 
 	if len(req.Subjects) == 0 {
-		utils.WriteJson(
-			w,
-			http.StatusBadRequest,
-			errorResponse{
-				Error: "at least one subject is required",
-			},
-		)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "at least one subject is required"})
 		return
 	}
 
 	if len(req.Subjects) > 100 {
-		utils.WriteJson(
-			w,
-			http.StatusBadRequest,
-			errorResponse{
-				Error: "the batch cannot exceed 100 subjects",
-			},
-		)
+		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: "the batch cannot exceed 100 subjects"})
 		return
 	}
 
-	inputs := make(
-		[]SubjectCreateInput,
-		0,
-		len(req.Subjects),
-	)
-
+	inputs := make([]SubjectCreateInput, 0, len(req.Subjects))
 	for _, subject := range req.Subjects {
-		inputs = append(
-			inputs,
-			SubjectCreateInput{
-				Name:  subject.Name,
-				Color: subject.Color,
-			},
-		)
+		inputs = append(inputs, SubjectCreateInput{
+			Name:  subject.Name,
+			Color: subject.Color,
+		})
 	}
 
-	results, err := c.service.CreateBatch(
-		r.Context(),
-		inputs,
-	)
-
+	results, err := c.service.CreateBatch(r.Context(), userID, inputs)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled):
 			slog.Info("subject import canceled")
 			return
-
-		case errors.Is(
-			err,
-			context.DeadlineExceeded,
-		):
-			utils.WriteJson(
-				w,
-				http.StatusGatewayTimeout,
-				errorResponse{
-					Error: "subject import timeout",
-				},
-			)
+		case errors.Is(err, context.DeadlineExceeded):
+			utils.WriteJson(w, http.StatusGatewayTimeout, errorResponse{Error: "subject import timeout"})
 			return
-
 		default:
-			slog.Error(
-				"failed to import subjects",
-				"error",
-				err,
-			)
-
-			utils.WriteJson(
-				w,
-				http.StatusInternalServerError,
-				errorResponse{
-					Error: "internal server error",
-				},
-			)
+			slog.Error("failed to import subjects", "error", err)
+			utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 			return
 		}
 	}
 
 	created := 0
 	failed := 0
-
-	items := make(
-		[]map[string]any,
-		0,
-		len(results),
-	)
+	items := make([]map[string]any, 0, len(results))
 
 	for _, result := range results {
 		item := map[string]any{
@@ -297,55 +249,31 @@ func (c *SubjectController) CreateBatch(
 		switch {
 		case result.Err == nil:
 			created++
-
-		case errors.Is(
-			result.Err,
-			ErrSubjectRequiredName,
-		):
+		case errors.Is(result.Err, ErrSubjectRequiredName):
 			failed++
 			item["error"] = "subject name is required"
-
-		case errors.Is(
-			result.Err,
-			ErrSubjectRequiredColor,
-		):
+		case errors.Is(result.Err, ErrSubjectRequiredColor):
 			failed++
 			item["error"] = "subject color is required"
-
-		case errors.Is(
-			result.Err,
-			ErrSubjectInvalidColor,
-		):
+		case errors.Is(result.Err, ErrSubjectInvalidColor):
 			failed++
 			item["error"] = "invalid subject color"
-
 		case errors.Is(result.Err, ErrSubjectDuplicated):
 			failed++
 			item["error"] = "subject already exists"
-
 		default:
 			failed++
 			item["error"] = "internal server error"
-
-			slog.Error(
-				"failed to create subject during import",
-				"index", result.Index,
-				"name", result.Name,
-				"error", result.Err,
-			)
+			slog.Error("failed to create subject during import", "index", result.Index, "name", result.Name, "error", result.Err)
 		}
 
 		items = append(items, item)
 	}
 
-	utils.WriteJson(
-		w,
-		http.StatusOK,
-		map[string]any{
-			"total":   len(req.Subjects),
-			"created": created,
-			"failed":  failed,
-			"results": items,
-		},
-	)
+	utils.WriteJson(w, http.StatusOK, map[string]any{
+		"total":   len(req.Subjects),
+		"created": created,
+		"failed":  failed,
+		"results": items,
+	})
 }

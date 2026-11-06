@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/utils"
@@ -23,11 +24,12 @@ type createBlockTaskRequest struct {
 }
 
 type updateBlockTaskRequest struct {
-	Title            *string       `json:"title"`
-	Description      *string       `json:"description"`
-	Position         *int          `json:"position"`
-	Priority         *TaskPriority `json:"priority"`
-	EstimatedSeconds *int          `json:"estimated_seconds"`
+	Title            *string          `json:"title"`
+	Description      *string          `json:"description"`
+	Position         *int             `json:"position"`
+	Priority         *TaskPriority    `json:"priority"`
+	EstimatedSeconds *int             `json:"estimated_seconds"`
+	Status           *BlockTaskStatus `json:"status"`
 }
 
 type reorderBlockTasksRequest struct {
@@ -43,6 +45,11 @@ func NewBlockTaskHandler(service BlockTaskServiceContract) *BlockTaskHandler {
 }
 
 func (h *BlockTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseTaskParentPath(w, r)
 	if !ok {
 		return
@@ -51,7 +58,7 @@ func (h *BlockTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeTaskJSON(w, r, &req) {
 		return
 	}
-	task, err := h.service.Create(r.Context(), sprintID, blockID, CreateBlockTaskInput{
+	task, err := h.service.Create(r.Context(), userID, sprintID, blockID, CreateBlockTaskInput{
 		Title: req.Title, Description: req.Description, Position: req.Position,
 		Priority: req.Priority, EstimatedSeconds: req.EstimatedSeconds,
 	})
@@ -63,11 +70,16 @@ func (h *BlockTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BlockTaskHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseTaskParentPath(w, r)
 	if !ok {
 		return
 	}
-	tasks, err := h.service.GetAll(r.Context(), sprintID, blockID)
+	tasks, err := h.service.GetAll(r.Context(), userID, sprintID, blockID)
 	if err != nil {
 		h.writeError(w, err, "get block tasks")
 		return
@@ -80,11 +92,16 @@ func (h *BlockTaskHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BlockTaskHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, taskID, ok := parseTaskPath(w, r)
 	if !ok {
 		return
 	}
-	task, err := h.service.GetByID(r.Context(), sprintID, blockID, taskID)
+	task, err := h.service.GetByID(r.Context(), userID, sprintID, blockID, taskID)
 	if err != nil {
 		h.writeError(w, err, "get block task")
 		return
@@ -93,6 +110,11 @@ func (h *BlockTaskHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BlockTaskHandler) Update(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, taskID, ok := parseTaskPath(w, r)
 	if !ok {
 		return
@@ -101,9 +123,9 @@ func (h *BlockTaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !decodeTaskJSON(w, r, &req) {
 		return
 	}
-	task, err := h.service.Update(r.Context(), sprintID, blockID, taskID, BlockTaskUpdateInput{
+	task, err := h.service.Update(r.Context(), userID, sprintID, blockID, taskID, BlockTaskUpdateInput{
 		Title: req.Title, Description: req.Description, Position: req.Position,
-		Priority: req.Priority, EstimatedSeconds: req.EstimatedSeconds,
+		Priority: req.Priority, EstimatedSeconds: req.EstimatedSeconds, Status: req.Status,
 	})
 	if err != nil {
 		h.writeError(w, err, "update block task")
@@ -113,11 +135,16 @@ func (h *BlockTaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BlockTaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, taskID, ok := parseTaskPath(w, r)
 	if !ok {
 		return
 	}
-	if err := h.service.Delete(r.Context(), sprintID, blockID, taskID); err != nil {
+	if err := h.service.Delete(r.Context(), userID, sprintID, blockID, taskID); err != nil {
 		h.writeError(w, err, "delete block task")
 		return
 	}
@@ -125,6 +152,11 @@ func (h *BlockTaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BlockTaskHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, blockTaskErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseTaskParentPath(w, r)
 	if !ok {
 		return
@@ -142,7 +174,7 @@ func (h *BlockTaskHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 		}
 		ids = append(ids, id)
 	}
-	if err := h.service.Reorder(r.Context(), sprintID, blockID, ids); err != nil {
+	if err := h.service.Reorder(r.Context(), userID, sprintID, blockID, ids); err != nil {
 		h.writeError(w, err, "reorder block tasks")
 		return
 	}
@@ -153,8 +185,8 @@ func (h *BlockTaskHandler) writeError(w http.ResponseWriter, err error, operatio
 	switch {
 	case errors.Is(err, ErrBlockTaskTitleRequired), errors.Is(err, ErrBlockTaskTitleTooLong),
 		errors.Is(err, ErrBlockTaskUpdateEmpty), errors.Is(err, ErrBlockTaskPositionInvalid),
-		errors.Is(err, ErrBlockTaskPriorityInvalid), errors.Is(err, ErrBlockTaskEstimatedSecondsInvalid),
-		errors.Is(err, ErrBlockTaskOrderInvalid):
+		errors.Is(err, ErrBlockTaskPriorityInvalid), errors.Is(err, ErrBlockTaskStatusInvalid),
+		errors.Is(err, ErrBlockTaskEstimatedSecondsInvalid), errors.Is(err, ErrBlockTaskOrderInvalid):
 		utils.WriteJson(w, http.StatusBadRequest, blockTaskErrorResponse{Error: err.Error()})
 	case errors.Is(err, sprint.ErrSprintNotFound), errors.Is(err, sprintblocks.ErrSprintBlockNotFound),
 		errors.Is(err, ErrBlockTaskNotFound):

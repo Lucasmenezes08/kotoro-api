@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
@@ -22,6 +23,7 @@ var (
 	ErrBlockTaskPositionInvalid         = errors.New("block task position must be greater than zero")
 	ErrBlockTaskPositionConflict        = errors.New("block task position is already occupied")
 	ErrBlockTaskPriorityInvalid         = errors.New("block task priority is invalid")
+	ErrBlockTaskStatusInvalid           = errors.New("block task status is invalid")
 	ErrBlockTaskEstimatedSecondsInvalid = errors.New("estimated seconds must be greater than zero")
 	ErrBlockTaskOrderInvalid            = errors.New("invalid block task order")
 	ErrSprintBlockNotInPlanning         = errors.New("block tasks can only be changed while sprint block is pending")
@@ -36,12 +38,12 @@ type sprintBlockReader interface {
 }
 
 type BlockTaskServiceContract interface {
-	Create(context.Context, uuid.UUID, uuid.UUID, CreateBlockTaskInput) (*BlockTask, error)
-	GetAll(context.Context, uuid.UUID, uuid.UUID) ([]BlockTask, error)
-	GetByID(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*BlockTask, error)
-	Update(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error)
-	Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
-	Reorder(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
+	Create(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, CreateBlockTaskInput) (*BlockTask, error)
+	GetAll(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]BlockTask, error)
+	GetByID(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) (*BlockTask, error)
+	Update(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error)
+	Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) error
+	Reorder(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) error
 }
 
 type BlockTaskService struct {
@@ -54,8 +56,8 @@ func NewBlockTaskService(repository BlockTaskRepositoryContract, sprints sprintR
 	return &BlockTaskService{repository: repository, sprints: sprints, blocks: blocks}
 }
 
-func (s *BlockTaskService) Create(ctx context.Context, sprintID, blockID uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
-	if err := s.requirePlanningHierarchy(ctx, sprintID, blockID); err != nil {
+func (s *BlockTaskService) Create(ctx context.Context, userID, sprintID, blockID uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
+	if err := s.requirePlanningHierarchy(ctx, userID, sprintID, blockID); err != nil {
 		return nil, err
 	}
 	title, err := normalizeTaskTitle(input.Title)
@@ -90,8 +92,8 @@ func (s *BlockTaskService) Create(ctx context.Context, sprintID, blockID uuid.UU
 	return task, nil
 }
 
-func (s *BlockTaskService) GetAll(ctx context.Context, sprintID, blockID uuid.UUID) ([]BlockTask, error) {
-	if _, err := s.requireHierarchy(ctx, sprintID, blockID); err != nil {
+func (s *BlockTaskService) GetAll(ctx context.Context, userID, sprintID, blockID uuid.UUID) ([]BlockTask, error) {
+	if _, err := s.requireHierarchy(ctx, userID, sprintID, blockID); err != nil {
 		return nil, err
 	}
 	tasks, err := s.repository.GetAllByBlockID(ctx, blockID)
@@ -104,8 +106,8 @@ func (s *BlockTaskService) GetAll(ctx context.Context, sprintID, blockID uuid.UU
 	return tasks, nil
 }
 
-func (s *BlockTaskService) GetByID(ctx context.Context, sprintID, blockID, taskID uuid.UUID) (*BlockTask, error) {
-	if _, err := s.requireHierarchy(ctx, sprintID, blockID); err != nil {
+func (s *BlockTaskService) GetByID(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID) (*BlockTask, error) {
+	if _, err := s.requireHierarchy(ctx, userID, sprintID, blockID); err != nil {
 		return nil, err
 	}
 	task, err := s.repository.GetByID(ctx, blockID, taskID)
@@ -115,13 +117,33 @@ func (s *BlockTaskService) GetByID(ctx context.Context, sprintID, blockID, taskI
 	return task, nil
 }
 
-func (s *BlockTaskService) Update(ctx context.Context, sprintID, blockID, taskID uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
-	if input.Title == nil && input.Description == nil && input.Position == nil && input.Priority == nil && input.EstimatedSeconds == nil {
+func (s *BlockTaskService) Update(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
+	if input.Title == nil && input.Description == nil && input.Position == nil && input.Priority == nil && input.EstimatedSeconds == nil && input.Status == nil {
 		return nil, ErrBlockTaskUpdateEmpty
 	}
-	if err := s.requirePlanningHierarchy(ctx, sprintID, blockID); err != nil {
+	sprintValue, err := s.sprints.GetById(ctx, sprintID)
+	if err != nil {
 		return nil, err
 	}
+	if sprintValue.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
+	}
+	if sprintValue.Status != sprint.Creating && sprintValue.Status != sprint.InProgress {
+		return nil, sprintblocks.ErrSprintNotInPlanning
+	}
+	block, err := s.blocks.GetByID(ctx, sprintID, blockID)
+	if err != nil {
+		return nil, err
+	}
+	if block.Status == sprintblocks.Finished {
+		return nil, ErrSprintBlockNotInPlanning
+	}
+
+	hasMetadataUpdate := input.Title != nil || input.Description != nil || input.Position != nil || input.Priority != nil || input.EstimatedSeconds != nil
+	if hasMetadataUpdate && sprintValue.Status == sprint.InProgress && block.Status != sprintblocks.Pending {
+		return nil, ErrSprintBlockNotInPlanning
+	}
+
 	if _, err := s.repository.GetByID(ctx, blockID, taskID); err != nil {
 		return nil, err
 	}
@@ -153,6 +175,19 @@ func (s *BlockTaskService) Update(ctx context.Context, sprintID, blockID, taskID
 	if err := validateEstimatedSeconds(input.EstimatedSeconds); err != nil {
 		return nil, err
 	}
+	if input.Status != nil {
+		if !validTaskStatus(*input.Status) {
+			return nil, ErrBlockTaskStatusInvalid
+		}
+		model.Status = input.Status
+		model.CompletedAtSet = true
+		if *input.Status == TaskDone {
+			now := time.Now().UTC()
+			model.CompletedAt = &now
+		} else {
+			model.CompletedAt = nil
+		}
+	}
 	task, err := s.repository.Update(ctx, blockID, taskID, model)
 	if err != nil {
 		return nil, fmt.Errorf("update block task: %w", err)
@@ -160,8 +195,8 @@ func (s *BlockTaskService) Update(ctx context.Context, sprintID, blockID, taskID
 	return task, nil
 }
 
-func (s *BlockTaskService) Delete(ctx context.Context, sprintID, blockID, taskID uuid.UUID) error {
-	if err := s.requirePlanningHierarchy(ctx, sprintID, blockID); err != nil {
+func (s *BlockTaskService) Delete(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID) error {
+	if err := s.requirePlanningHierarchy(ctx, userID, sprintID, blockID); err != nil {
 		return err
 	}
 	if err := s.repository.Delete(ctx, blockID, taskID); err != nil {
@@ -170,8 +205,8 @@ func (s *BlockTaskService) Delete(ctx context.Context, sprintID, blockID, taskID
 	return nil
 }
 
-func (s *BlockTaskService) Reorder(ctx context.Context, sprintID, blockID uuid.UUID, taskIDs []uuid.UUID) error {
-	if err := s.requirePlanningHierarchy(ctx, sprintID, blockID); err != nil {
+func (s *BlockTaskService) Reorder(ctx context.Context, userID, sprintID, blockID uuid.UUID, taskIDs []uuid.UUID) error {
+	if err := s.requirePlanningHierarchy(ctx, userID, sprintID, blockID); err != nil {
 		return err
 	}
 	tasks, err := s.repository.GetAllByBlockID(ctx, blockID)
@@ -201,9 +236,13 @@ func (s *BlockTaskService) Reorder(ctx context.Context, sprintID, blockID uuid.U
 	return nil
 }
 
-func (s *BlockTaskService) requireHierarchy(ctx context.Context, sprintID, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
-	if _, err := s.sprints.GetById(ctx, sprintID); err != nil {
+func (s *BlockTaskService) requireHierarchy(ctx context.Context, userID, sprintID, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
+	sprintValue, err := s.sprints.GetById(ctx, sprintID)
+	if err != nil {
 		return nil, err
+	}
+	if sprintValue.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
 	}
 	block, err := s.blocks.GetByID(ctx, sprintID, blockID)
 	if err != nil {
@@ -212,12 +251,15 @@ func (s *BlockTaskService) requireHierarchy(ctx context.Context, sprintID, block
 	return block, nil
 }
 
-func (s *BlockTaskService) requirePlanningHierarchy(ctx context.Context, sprintID, blockID uuid.UUID) error {
+func (s *BlockTaskService) requirePlanningHierarchy(ctx context.Context, userID, sprintID, blockID uuid.UUID) error {
 	sprintValue, err := s.sprints.GetById(ctx, sprintID)
 	if err != nil {
 		return err
 	}
-	if sprintValue.Status != sprint.Creating {
+	if sprintValue.UserID != userID {
+		return sprint.ErrSprintNotFound
+	}
+	if sprintValue.Status != sprint.Creating && sprintValue.Status != sprint.InProgress {
 		return sprintblocks.ErrSprintNotInPlanning
 	}
 	block, err := s.blocks.GetByID(ctx, sprintID, blockID)
@@ -280,6 +322,15 @@ func validateEstimatedSeconds(value *int) error {
 func validPriority(priority TaskPriority) bool {
 	switch priority {
 	case PriorityLow, PriorityMedium, PriorityHigh, PriorityVeryHigh:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTaskStatus(status BlockTaskStatus) bool {
+	switch status {
+	case TaskPending, TaskInProgress, TaskDone, TaskCancelled:
 		return true
 	default:
 		return false
