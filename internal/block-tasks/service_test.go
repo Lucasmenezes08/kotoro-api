@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
@@ -155,6 +156,9 @@ func TestBlockTaskServiceHierarchyAndState(t *testing.T) {
 		{"sprint missing", fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) { return nil, sprint.ErrSprintNotFound }}, pendingBlock(), sprint.ErrSprintNotFound},
 		{"sprint not planning", fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
 			return &sprint.Sprint{Status: sprint.Finished, UserID: defaultTestUserID}, nil
+		}}, pendingBlock(), sprintblocks.ErrSprintNotInPlanning},
+		{"sprint in past date", fakeTaskSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.Creating, UserID: defaultTestUserID, SprintDate: time.Now().AddDate(0, 0, -1)}, nil
 		}}, pendingBlock(), sprintblocks.ErrSprintNotInPlanning},
 		{"block missing or foreign", planningSprint(), fakeTaskBlockReader{fn: func(context.Context, uuid.UUID, uuid.UUID) (*sprintblocks.SprintBlock, error) {
 			return nil, sprintblocks.ErrSprintBlockNotFound

@@ -131,6 +131,9 @@ func (s *BlockTaskService) Update(ctx context.Context, userID, sprintID, blockID
 	if sprintValue.Status != sprint.Creating && sprintValue.Status != sprint.InProgress {
 		return nil, sprintblocks.ErrSprintNotInPlanning
 	}
+	if sprint.IsPastDate(sprintValue.SprintDate) {
+		return nil, sprintblocks.ErrSprintNotInPlanning
+	}
 	block, err := s.blocks.GetByID(ctx, sprintID, blockID)
 	if err != nil {
 		return nil, err
@@ -260,6 +263,9 @@ func (s *BlockTaskService) requirePlanningHierarchy(ctx context.Context, userID,
 		return sprint.ErrSprintNotFound
 	}
 	if sprintValue.Status != sprint.Creating && sprintValue.Status != sprint.InProgress {
+		return sprintblocks.ErrSprintNotInPlanning
+	}
+	if sprint.IsPastDate(sprintValue.SprintDate) {
 		return sprintblocks.ErrSprintNotInPlanning
 	}
 	block, err := s.blocks.GetByID(ctx, sprintID, blockID)

@@ -19,6 +19,7 @@ var (
 	ErrSprintDateInPast              error = errors.New("sprint date cannot be in the past")
 	ErrSprintDateRequired            error = errors.New("sprint date is required")
 	ErrSprintDeleteStatusNotCreating error = errors.New("Sprint can only be deleted while its status is 'creating'")
+	ErrSprintNotEditable             error = errors.New("sprint is not editable; actions can only be performed on planning or in-progress sprints from today or future")
 )
 
 type SprintServiceContract interface {
@@ -45,9 +46,9 @@ func (s *SprintService) Create(ctx context.Context, userID uuid.UUID, payload Cr
 	}
 
 	location := payload.SprintDate.Location()
-	timeToday := beginningOfDay(time.Now(), location)
+	timeToday := BeginningOfDay(time.Now(), location)
 
-	sprintDate := beginningOfDay(payload.SprintDate, location)
+	sprintDate := BeginningOfDay(payload.SprintDate, location)
 
 	if sprintDate.Before(timeToday) {
 		return ErrSprintDateInPast
@@ -113,6 +114,22 @@ func (s *SprintService) Update(ctx context.Context, userID uuid.UUID, id uuid.UU
 		return ErrSprintStatusInvalid
 	}
 
+	existing, err := s.repo.GetByIdAndUser(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return ErrSprintNotFound
+	}
+
+	if existing.Status != Creating && existing.Status != InProgress {
+		return ErrSprintNotEditable
+	}
+
+	if IsPastDate(existing.SprintDate) {
+		return ErrSprintNotEditable
+	}
+
 	if err := s.repo.Update(ctx, userID, id, payload); err != nil {
 		return err
 	}
@@ -128,6 +145,10 @@ func (s *SprintService) DeleteById(ctx context.Context, userID uuid.UUID, id uui
 
 	if sprint.Status != Creating {
 		return ErrSprintDeleteStatusNotCreating
+	}
+
+	if IsPastDate(sprint.SprintDate) {
+		return ErrSprintDateInPast
 	}
 
 	if err := s.repo.DeleteById(ctx, userID, id); err != nil {
@@ -146,10 +167,13 @@ func validSprintStatus(status SprintStatus) bool {
 	}
 }
 
-func beginningOfDay(
+func BeginningOfDay(
 	value time.Time,
 	location *time.Location,
 ) time.Time {
+	if location == nil {
+		location = value.Location()
+	}
 	localTime := value.In(location)
 
 	return time.Date(
@@ -162,4 +186,14 @@ func beginningOfDay(
 		0,
 		location,
 	)
+}
+
+func IsPastDate(date time.Time) bool {
+	if date.IsZero() {
+		return false
+	}
+	location := date.Location()
+	timeToday := BeginningOfDay(time.Now(), location)
+	sprintDay := BeginningOfDay(date, location)
+	return sprintDay.Before(timeToday)
 }

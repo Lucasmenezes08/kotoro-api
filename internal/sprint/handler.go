@@ -118,6 +118,8 @@ func (h *SprintHandler) Update(w http.ResponseWriter, r *http.Request) {
 		utils.WriteJson(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
+	case errors.Is(err, ErrSprintNotEditable):
+		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
 	case err != nil:
 		slog.Error("failed to update sprint", "error", err)
 		utils.WriteJson(w, http.StatusInternalServerError, errorResponse{Error: "Internal server error"})
@@ -144,7 +146,7 @@ func (h *SprintHandler) DeleteById(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrSprintNotFound):
 		utils.WriteJson(w, http.StatusNotFound, errorResponse{Error: err.Error()})
-	case errors.Is(err, ErrSprintDeleteStatusNotCreating):
+	case errors.Is(err, ErrSprintDeleteStatusNotCreating), errors.Is(err, ErrSprintDateInPast):
 		utils.WriteJson(w, http.StatusConflict, errorResponse{Error: err.Error()})
 	case err != nil:
 		slog.Error("failed to delete sprint", "error", err)

@@ -290,6 +290,9 @@ func (s *SprintBlockService) requireEditableSprint(ctx context.Context, userID, 
 	if value.Status != sprint.Creating && value.Status != sprint.InProgress {
 		return nil, ErrSprintNotInPlanning
 	}
+	if sprint.IsPastDate(value.SprintDate) {
+		return nil, ErrSprintNotInPlanning
+	}
 	return value, nil
 }
 

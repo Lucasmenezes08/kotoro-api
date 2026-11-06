@@ -61,6 +61,9 @@ func (s *StudyCycleService) Play(ctx context.Context, userID, sprintID uuid.UUID
 		if sp.Status != sprint.InProgress {
 			return ErrSprintNotStarted
 		}
+		if sprint.IsPastDate(sp.SprintDate) {
+			return ErrSprintNotStarted
+		}
 
 		hasActive, err := tx.HasActiveCycleBySprintID(ctx, sprintID)
 		if err != nil {

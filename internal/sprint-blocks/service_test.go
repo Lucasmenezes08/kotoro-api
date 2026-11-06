@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
@@ -177,6 +178,15 @@ func TestSprintBlockServiceCreateRelationsAndConflicts(t *testing.T) {
 	t.Run("sprint outside planning", func(t *testing.T) {
 		service := NewSprintBlockService(&fakeBlockRepository{}, fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
 			return &sprint.Sprint{Status: sprint.Finished, UserID: defaultTestUserID}, nil
+		}}, existingSubjectReader())
+		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
+		if !errors.Is(err, ErrSprintNotInPlanning) {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("sprint in past date", func(t *testing.T) {
+		service := NewSprintBlockService(&fakeBlockRepository{}, fakeSprintReader{fn: func(context.Context, uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{Status: sprint.Creating, UserID: defaultTestUserID, SprintDate: time.Now().AddDate(0, 0, -1)}, nil
 		}}, existingSubjectReader())
 		_, err := service.Create(context.Background(), defaultTestUserID, sprintID, CreateSprintBlockInput{SubjectID: subjectID, Position: 1})
 		if !errors.Is(err, ErrSprintNotInPlanning) {

@@ -56,7 +56,12 @@ func (f *fakeSprintRepository) GetById(
 	id uuid.UUID,
 ) (*Sprint, error) {
 	if f.getByIdFn == nil {
-		panic("unexpected call to GetById")
+		return &Sprint{
+			ID:         id,
+			UserID:     defaultTestUserID,
+			Status:     Creating,
+			SprintDate: time.Now(),
+		}, nil
 	}
 
 	sp, err := f.getByIdFn(ctx, id)
@@ -642,6 +647,85 @@ func TestSprintServiceUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("fails to update finished sprint", func(t *testing.T) {
+		name := "Novo Nome"
+		repository := &fakeSprintRepository{
+			getByIdFn: func(ctx context.Context, id uuid.UUID) (*Sprint, error) {
+				return &Sprint{
+					ID:         id,
+					UserID:     defaultTestUserID,
+					Status:     Finished,
+					SprintDate: time.Now(),
+				}, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+		err := service.Update(
+			context.Background(),
+			defaultTestUserID,
+			uuid.New(),
+			UpdateSprintModel{Name: &name},
+		)
+
+		if !errors.Is(err, ErrSprintNotEditable) {
+			t.Fatalf("expected ErrSprintNotEditable, got %v", err)
+		}
+	})
+
+	t.Run("fails to update abandoned sprint", func(t *testing.T) {
+		name := "Novo Nome"
+		repository := &fakeSprintRepository{
+			getByIdFn: func(ctx context.Context, id uuid.UUID) (*Sprint, error) {
+				return &Sprint{
+					ID:         id,
+					UserID:     defaultTestUserID,
+					Status:     Abandoned,
+					SprintDate: time.Now(),
+				}, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+		err := service.Update(
+			context.Background(),
+			defaultTestUserID,
+			uuid.New(),
+			UpdateSprintModel{Name: &name},
+		)
+
+		if !errors.Is(err, ErrSprintNotEditable) {
+			t.Fatalf("expected ErrSprintNotEditable, got %v", err)
+		}
+	})
+
+	t.Run("fails to update sprint with past date", func(t *testing.T) {
+		name := "Novo Nome"
+		pastDate := time.Now().AddDate(0, 0, -2)
+		repository := &fakeSprintRepository{
+			getByIdFn: func(ctx context.Context, id uuid.UUID) (*Sprint, error) {
+				return &Sprint{
+					ID:         id,
+					UserID:     defaultTestUserID,
+					Status:     InProgress,
+					SprintDate: pastDate,
+				}, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+		err := service.Update(
+			context.Background(),
+			defaultTestUserID,
+			uuid.New(),
+			UpdateSprintModel{Name: &name},
+		)
+
+		if !errors.Is(err, ErrSprintNotEditable) {
+			t.Fatalf("expected ErrSprintNotEditable, got %v", err)
+		}
+	})
+
 	t.Run("propagates repository error", func(t *testing.T) {
 		repositoryError := errors.New("update sprint failed")
 		status := Finished
@@ -860,6 +944,34 @@ func TestSprintServiceDeleteById(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("fails to delete sprint with past date", func(t *testing.T) {
+		id := uuid.New()
+		pastDate := time.Now().AddDate(0, 0, -2)
+
+		repository := &fakeSprintRepository{
+			getByIdFn: func(
+				ctx context.Context,
+				receivedID uuid.UUID,
+			) (*Sprint, error) {
+				return &Sprint{
+					ID:         id,
+					Status:     Creating,
+					SprintDate: pastDate,
+				}, nil
+			},
+		}
+
+		service := NewSprintService(repository)
+
+		err := service.DeleteById(context.Background(), defaultTestUserID, id)
+		if !errors.Is(err, ErrSprintDateInPast) {
+			t.Fatalf(
+				"expected ErrSprintDateInPast, got %v",
+				err,
+			)
+		}
+	})
 
 	t.Run("propagates get sprint repository error", func(t *testing.T) {
 		repositoryError := ErrSprintNotFound
