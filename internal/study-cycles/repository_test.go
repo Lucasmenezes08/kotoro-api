@@ -243,7 +243,7 @@ func (tx *inMemoryTx) GetActiveTasksByBlockID(_ context.Context, blockID uuid.UU
 func (tx *inMemoryTx) GetNextSequenceNumber(_ context.Context, sprintID uuid.UUID) (int, error) {
 	maxSeq := 0
 	for _, c := range tx.cycles {
-		if c.SprintID == sprintID && c.SequenceNumber > maxSeq {
+		if c.SprintID == sprintID && c.Status != StudyCycleCancelled && c.SequenceNumber > maxSeq {
 			maxSeq = c.SequenceNumber
 		}
 	}
@@ -255,7 +255,7 @@ func (tx *inMemoryTx) CreateCycle(_ context.Context, input CreateStudyCycleModel
 		if c.SprintID == input.SprintID && (c.Status == StudyCycleInProgress || c.Status == StudyCyclePaused) {
 			return nil, ErrStudyCycleAlreadyActive
 		}
-		if c.SprintID == input.SprintID && c.SequenceNumber == input.SequenceNumber {
+		if c.SprintID == input.SprintID && c.Status != StudyCycleCancelled && c.SequenceNumber == input.SequenceNumber {
 			return nil, ErrStudyCycleAlreadyActive
 		}
 	}

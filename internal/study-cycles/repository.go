@@ -341,7 +341,7 @@ func (t *studyCycleTxRepository) GetNextSequenceNumber(ctx context.Context, spri
 	query := `
 		SELECT COALESCE(MAX(sequence_number), 0) + 1
 		FROM study_cycles
-		WHERE sprint_id = $1
+		WHERE sprint_id = $1 AND status != 'cancelado'
 	`
 	if err := t.tx.GetContext(ctx, &nextSeq, query, sprintID); err != nil {
 		return 0, fmt.Errorf("calculate next sequence number: %w", err)

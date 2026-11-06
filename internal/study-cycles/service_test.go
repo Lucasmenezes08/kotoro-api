@@ -1300,3 +1300,167 @@ func TestStudyCycleServiceGetActiveAndGetAll(t *testing.T) {
 		t.Fatalf("expected nil active cycle without error, got %#v %v", activeEmpty, err)
 	}
 }
+
+func TestStudyCycleCancelledDoesNotIncrementSequence(t *testing.T) {
+	sprintID := uuid.New()
+	blockID := uuid.New()
+	fixedNow := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+
+	sp := &sprint.Sprint{
+		ID:         sprintID,
+		UserID:     defaultTestUserID,
+		Status:     sprint.InProgress,
+		SprintDate: fixedNow,
+	}
+	blocks := []sprintblocks.SprintBlock{
+		{
+			ID:       blockID,
+			SprintID: sprintID,
+			Position: 1,
+			Status:   sprintblocks.Pending,
+		},
+	}
+
+	cycles := make([]StudyCycle, 0)
+	tx := &fakeStudyCycleTxRepository{
+		lockSprintByIDFn: func(ctx context.Context, sid uuid.UUID) (*sprint.Sprint, error) {
+			return sp, nil
+		},
+		hasActiveCycleBySprintFn: func(ctx context.Context, sid uuid.UUID) (bool, error) {
+			for _, c := range cycles {
+				if c.SprintID == sid && (c.Status == StudyCycleInProgress || c.Status == StudyCyclePaused) {
+					return true, nil
+				}
+			}
+			return false, nil
+		},
+		lockBlocksBySprintIDFn: func(ctx context.Context, sid uuid.UUID) ([]sprintblocks.SprintBlock, error) {
+			return blocks, nil
+		},
+		getActiveTasksByBlockIDFn: func(ctx context.Context, bid uuid.UUID) ([]blocktasks.BlockTask, error) {
+			return nil, nil
+		},
+		lockCycleByIDFn: func(ctx context.Context, cid uuid.UUID) (*StudyCycle, error) {
+			for i := range cycles {
+				if cycles[i].ID == cid {
+					return &cycles[i], nil
+				}
+			}
+			return nil, ErrStudyCycleNotFound
+		},
+		getNextSequenceNumberFn: func(ctx context.Context, sid uuid.UUID) (int, error) {
+			maxSeq := 0
+			for _, c := range cycles {
+				if c.SprintID == sid && c.Status != StudyCycleCancelled && c.SequenceNumber > maxSeq {
+					maxSeq = c.SequenceNumber
+				}
+			}
+			return maxSeq + 1, nil
+		},
+		createCycleFn: func(ctx context.Context, input CreateStudyCycleModel) (*StudyCycle, error) {
+			c := StudyCycle{
+				ID:             uuid.New(),
+				SprintID:       input.SprintID,
+				SprintBlockID:  input.SprintBlockID,
+				SequenceNumber: input.SequenceNumber,
+				ExecutionMode:  input.ExecutionMode,
+				TimerType:      input.TimerType,
+				Status:         input.Status,
+				StartedAt:      input.StartedAt,
+				RunningSince:   input.RunningSince,
+			}
+			cycles = append(cycles, c)
+			return &c, nil
+		},
+		updateBlockStatusFn: func(ctx context.Context, bid uuid.UUID, st sprintblocks.SprintBlocksStatus, started, completed *time.Time) error {
+			return nil
+		},
+		stopCycleConditionalFn: func(ctx context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+			for i := range cycles {
+				if cycles[i].ID == input.ID {
+					cycles[i].Status = input.Status
+					cycles[i].StopReason = &input.StopReason
+					cycles[i].EndedAt = &input.EndedAt
+					cycles[i].ElapsedSeconds = input.ElapsedSeconds
+					return &cycles[i], nil
+				}
+			}
+			return nil, ErrStudyCycleNotFound
+		},
+	}
+
+	repo := &fakeStudyCycleRepository{tx: tx}
+	service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
+
+	// 1. Play cycle 1
+	c1, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
+		ExecutionMode: ExecutionModeSubjectBlock,
+		TimerType:     TimerTypeFree,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error playing cycle 1: %v", err)
+	}
+	if c1.SequenceNumber != 1 {
+		t.Fatalf("expected cycle 1 to have SequenceNumber 1, got %d", c1.SequenceNumber)
+	}
+
+	// 2. Stop cycle 1 with cancelado
+	_, err = service.Stop(context.Background(), defaultTestUserID, c1.ID, StopStudyCycleInput{
+		Reason: CycleStopReasonCancelled,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error cancelling cycle 1: %v", err)
+	}
+
+	// 3. Play cycle again -> Should STILL be SequenceNumber 1 (cancelled does not increment)
+	c1Retry, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
+		ExecutionMode: ExecutionModeSubjectBlock,
+		TimerType:     TimerTypeFree,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error playing cycle retry: %v", err)
+	}
+	if c1Retry.SequenceNumber != 1 {
+		t.Fatalf("expected cancelled cycle not to increment sequence: expected 1, got %d", c1Retry.SequenceNumber)
+	}
+
+	// 4. Conclude cycle 1
+	_, err = service.Stop(context.Background(), defaultTestUserID, c1Retry.ID, StopStudyCycleInput{
+		Reason: CycleStopReasonCompleted,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error concluding cycle: %v", err)
+	}
+
+	// 5. Play cycle 2 -> SequenceNumber is 2
+	c2, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
+		ExecutionMode: ExecutionModeSubjectBlock,
+		TimerType:     TimerTypeFree,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error playing cycle 2: %v", err)
+	}
+	if c2.SequenceNumber != 2 {
+		t.Fatalf("expected cycle 2 to have SequenceNumber 2, got %d", c2.SequenceNumber)
+	}
+
+	// 6. Cancel cycle 2
+	_, err = service.Stop(context.Background(), defaultTestUserID, c2.ID, StopStudyCycleInput{
+		Reason: CycleStopReasonCancelled,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error cancelling cycle 2: %v", err)
+	}
+
+	// 7. Play cycle again -> SequenceNumber is STILL 2 (does not increment to 3)
+	c2Retry, err := service.Play(context.Background(), defaultTestUserID, sprintID, PlayStudyCycleInput{
+		ExecutionMode: ExecutionModeSubjectBlock,
+		TimerType:     TimerTypeFree,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error playing cycle 2 retry: %v", err)
+	}
+	if c2Retry.SequenceNumber != 2 {
+		t.Fatalf("expected cancelled cycle 2 not to increment sequence: expected 2, got %d", c2Retry.SequenceNumber)
+	}
+}

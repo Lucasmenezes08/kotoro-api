@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/outbox"
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
@@ -22,8 +23,9 @@ type StudyCycleServiceContract interface {
 }
 
 type StudyCycleService struct {
-	repo StudyCycleRepositoryContract
-	now  func() time.Time
+	repo   StudyCycleRepositoryContract
+	outbox *outbox.OutboxRepository
+	now    func() time.Time
 }
 
 func NewStudyCycleService(repo StudyCycleRepositoryContract) *StudyCycleService {
@@ -42,6 +44,10 @@ func NewStudyCycleServiceWithClock(repo StudyCycleRepositoryContract, clock func
 		repo: repo,
 		now:  clock,
 	}
+}
+
+func (s *StudyCycleService) SetOutbox(outbox *outbox.OutboxRepository) {
+	s.outbox = outbox
 }
 
 func (s *StudyCycleService) Play(ctx context.Context, userID, sprintID uuid.UUID, input PlayStudyCycleInput) (StudyCycle, error) {
