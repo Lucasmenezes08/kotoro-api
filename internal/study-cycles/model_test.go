@@ -222,3 +222,48 @@ func TestStudyCycleStateTransitions(t *testing.T) {
 		t.Fatalf("expected ErrStudyCycleAlreadyStopped on terminal stop, got %v", err)
 	}
 }
+
+func TestStudyCycle_ApplyStop_CancelledZeroesElapsedSeconds(t *testing.T) {
+	t0 := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(10 * time.Minute)
+
+	// Stopping in-progress cycle as cancelled
+	cycle := StudyCycle{
+		ID:             uuid.New(),
+		Status:         StudyCycleInProgress,
+		StartedAt:      t0,
+		RunningSince:   &t0,
+		ElapsedSeconds: 300,
+	}
+
+	cancelled, err := cycle.ApplyStop(t1, CycleStopReasonCancelled)
+	if err != nil {
+		t.Fatalf("expected stop to succeed, got %v", err)
+	}
+	if cancelled.Status != StudyCycleCancelled {
+		t.Fatalf("expected status cancelado, got %s", cancelled.Status)
+	}
+	if cancelled.ElapsedSeconds != 0 {
+		t.Fatalf("expected elapsed seconds to be 0 for cancelled cycle, got %d", cancelled.ElapsedSeconds)
+	}
+
+	// Stopping paused cycle as cancelled
+	pausedCycle := StudyCycle{
+		ID:             uuid.New(),
+		Status:         StudyCyclePaused,
+		StartedAt:      t0,
+		PausedAt:       &t1,
+		ElapsedSeconds: 600,
+	}
+
+	cancelledPaused, err := pausedCycle.ApplyStop(t1, CycleStopReasonCancelled)
+	if err != nil {
+		t.Fatalf("expected stop to succeed, got %v", err)
+	}
+	if cancelledPaused.Status != StudyCycleCancelled {
+		t.Fatalf("expected status cancelado, got %s", cancelledPaused.Status)
+	}
+	if cancelledPaused.ElapsedSeconds != 0 {
+		t.Fatalf("expected elapsed seconds to be 0 for cancelled paused cycle, got %d", cancelledPaused.ElapsedSeconds)
+	}
+}

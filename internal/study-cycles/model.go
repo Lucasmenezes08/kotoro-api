@@ -348,7 +348,11 @@ func (c *StudyCycle) ApplyStop(now time.Time, reason CycleStopReason) (StudyCycl
 		endedAt := now.UTC()
 		stopReason := reason
 		updated := *c
-		updated.ElapsedSeconds = c.ElapsedSeconds + calculateAdditionalElapsedSeconds(c.RunningSince, endedAt)
+		if terminalStatus == StudyCycleCancelled {
+			updated.ElapsedSeconds = 0
+		} else {
+			updated.ElapsedSeconds = c.ElapsedSeconds + calculateAdditionalElapsedSeconds(c.RunningSince, endedAt)
+		}
 		updated.Status = terminalStatus
 		updated.RunningSince = nil
 		updated.EndedAt = &endedAt
@@ -359,6 +363,9 @@ func (c *StudyCycle) ApplyStop(now time.Time, reason CycleStopReason) (StudyCycl
 		endedAt := now.UTC()
 		stopReason := reason
 		updated := *c
+		if terminalStatus == StudyCycleCancelled {
+			updated.ElapsedSeconds = 0
+		}
 		updated.Status = terminalStatus
 		updated.RunningSince = nil
 		updated.EndedAt = &endedAt
