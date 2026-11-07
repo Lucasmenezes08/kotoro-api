@@ -2,6 +2,7 @@ package studycycles
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/database"
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/outbox"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/Lucasmenezes08/kotoro-api.git/migrations"
@@ -29,6 +31,7 @@ type inMemoryConcurrentRepo struct {
 	tasks       map[uuid.UUID]blocktasks.BlockTask
 	cycles      map[uuid.UUID]StudyCycle
 	cycleTasks  map[uuid.UUID][]StudyCycleTask
+	events      map[uuid.UUID]outbox.Event
 	failOnBlock bool
 }
 
@@ -39,6 +42,7 @@ func newInMemoryConcurrentRepo() *inMemoryConcurrentRepo {
 		tasks:      make(map[uuid.UUID]blocktasks.BlockTask),
 		cycles:     make(map[uuid.UUID]StudyCycle),
 		cycleTasks: make(map[uuid.UUID][]StudyCycleTask),
+		events:     make(map[uuid.UUID]outbox.Event),
 	}
 }
 
@@ -49,6 +53,7 @@ type inMemoryTx struct {
 	tasks      map[uuid.UUID]blocktasks.BlockTask
 	cycles     map[uuid.UUID]StudyCycle
 	cycleTasks map[uuid.UUID][]StudyCycleTask
+	events     map[uuid.UUID]outbox.Event
 }
 
 func (r *inMemoryConcurrentRepo) WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error {
@@ -62,6 +67,7 @@ func (r *inMemoryConcurrentRepo) WithinTransaction(ctx context.Context, fn func(
 		tasks:      make(map[uuid.UUID]blocktasks.BlockTask, len(r.tasks)),
 		cycles:     make(map[uuid.UUID]StudyCycle, len(r.cycles)),
 		cycleTasks: make(map[uuid.UUID][]StudyCycleTask, len(r.cycleTasks)),
+		events:     make(map[uuid.UUID]outbox.Event, len(r.events)),
 	}
 	for k, v := range r.sprints {
 		tx.sprints[k] = v
@@ -80,6 +86,9 @@ func (r *inMemoryConcurrentRepo) WithinTransaction(ctx context.Context, fn func(
 		copy(copied, v)
 		tx.cycleTasks[k] = copied
 	}
+	for k, v := range r.events {
+		tx.events[k] = v
+	}
 
 	if err := fn(ctx, tx); err != nil {
 		// Rollback: discard tx state
@@ -92,6 +101,7 @@ func (r *inMemoryConcurrentRepo) WithinTransaction(ctx context.Context, fn func(
 	r.tasks = tx.tasks
 	r.cycles = tx.cycles
 	r.cycleTasks = tx.cycleTasks
+	r.events = tx.events
 	return nil
 }
 
@@ -336,6 +346,14 @@ func (tx *inMemoryTx) LockCycleByID(_ context.Context, cycleID uuid.UUID) (*Stud
 	return &copied, nil
 }
 
+func (tx *inMemoryTx) GetBlockByID(_ context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
+	block, ok := tx.blocks[blockID]
+	if !ok || block.DeletedAt != nil {
+		return nil, sprintblocks.ErrSprintBlockNotFound
+	}
+	return &block, nil
+}
+
 func (tx *inMemoryTx) GetCycleTaskIDs(_ context.Context, cycleID uuid.UUID) ([]uuid.UUID, error) {
 	var ids []uuid.UUID
 	for _, ct := range tx.cycleTasks[cycleID] {
@@ -373,6 +391,11 @@ func (tx *inMemoryTx) StopCycleConditional(_ context.Context, input StopStudyCyc
 	tx.cycles[input.ID] = c
 	copied := c
 	return &copied, nil
+}
+
+func (tx *inMemoryTx) EnqueueOutboxEvent(_ context.Context, event outbox.Event) error {
+	tx.events[event.ID] = event
+	return nil
 }
 
 func TestConstraintTranslationAndMigrations(t *testing.T) {
@@ -806,6 +829,43 @@ func TestStudyCycleRepositoryPostgresIntegration(t *testing.T) {
 		stopped, err := service.Stop(ctx, testUserID, activeCycle.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted})
 		if err != nil || stopped.ElapsedSeconds != 90 || stopped.Status != StudyCycleFinished {
 			t.Fatalf("unexpected stop result: %#v %v", stopped, err)
+		}
+
+		var persistedEvent struct {
+			AggregateID  uuid.UUID       `db:"aggregate_id"`
+			EventType    string          `db:"event_type"`
+			EventVersion int             `db:"event_version"`
+			Status       string          `db:"status"`
+			OccurredAt   time.Time       `db:"occurred_at"`
+			Payload      json.RawMessage `db:"payload"`
+		}
+		if err := db.GetContext(ctx, &persistedEvent, `SELECT aggregate_id, event_type, event_version, status, occurred_at, payload FROM outbox_events WHERE aggregate_id = $1`, activeCycle.ID); err != nil {
+			t.Fatalf("get finished outbox event: %v", err)
+		}
+		if persistedEvent.AggregateID != activeCycle.ID || persistedEvent.EventType != StudyCycleFinishedEventType || persistedEvent.EventVersion != 1 || persistedEvent.Status != string(outbox.StatusPending) || !persistedEvent.OccurredAt.Equal(currentNow) {
+			t.Fatalf("unexpected persisted event envelope: %#v", persistedEvent)
+		}
+		var payload StudyCycleFinishedEventV1
+		if err := json.Unmarshal(persistedEvent.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal persisted event payload: %v", err)
+		}
+		if payload.SubjectID != subjectID || payload.ElapsedSeconds != 90 || payload.CompletedTaskIDs == nil {
+			t.Fatalf("unexpected persisted event payload: %#v", payload)
+		}
+
+		if _, err := service.Stop(ctx, testUserID, activeCycle.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); !errors.Is(err, ErrStudyCycleAlreadyStopped) {
+			t.Fatalf("expected repeated stop to fail, got %v", err)
+		}
+		var eventCount int
+		if err := db.GetContext(ctx, &eventCount, `SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1`, activeCycle.ID); err != nil {
+			t.Fatalf("count finished events: %v", err)
+		}
+		if eventCount != 1 {
+			t.Fatalf("expected exactly one finished event, got %d", eventCount)
+		}
+
+		if _, err := service.Stop(ctx, uuid.New(), activeCycle.ID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); !errors.Is(err, ErrStudyCycleNotFound) {
+			t.Fatalf("expected non-owner stop to fail as not found, got %v", err)
 		}
 	})
 }

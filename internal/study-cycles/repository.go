@@ -8,6 +8,7 @@ import (
 	"time"
 
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/outbox"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/google/uuid"
@@ -34,9 +35,11 @@ type StudyCycleTxRepositoryContract interface {
 	UpdateTasksStatus(ctx context.Context, blockID uuid.UUID, taskIDs []uuid.UUID, status blocktasks.BlockTaskStatus, completedAt *time.Time) error
 
 	LockCycleByID(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
+	GetBlockByID(ctx context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error)
 	GetCycleTaskIDs(ctx context.Context, cycleID uuid.UUID) ([]uuid.UUID, error)
 	CompleteCycleTasks(ctx context.Context, cycleID uuid.UUID, completedAt time.Time) error
 	StopCycleConditional(ctx context.Context, input StopStudyCycleModel) (*StudyCycle, error)
+	EnqueueOutboxEvent(ctx context.Context, event outbox.Event) error
 }
 
 type StudyCycleRepositoryContract interface {
@@ -54,8 +57,11 @@ type StudyCycleRepository struct {
 }
 
 type studyCycleTxRepository struct {
-	tx *sqlx.Tx
+	tx         *sqlx.Tx
+	outboxRepo *outbox.OutboxRepository
 }
+
+var _ StudyCycleTxRepositoryContract = (*studyCycleTxRepository)(nil)
 
 func NewStudyCycleRepository(db *sqlx.DB) *StudyCycleRepository {
 	return &StudyCycleRepository{
@@ -63,19 +69,57 @@ func NewStudyCycleRepository(db *sqlx.DB) *StudyCycleRepository {
 	}
 }
 
-func (r *StudyCycleRepository) WithinTransaction(ctx context.Context, fn func(ctx context.Context, tx StudyCycleTxRepositoryContract) error) error {
-	tx, err := r.db.BeginTxx(ctx, nil)
+func (r *StudyCycleRepository) WithinTransaction(
+	ctx context.Context,
+	fn func(
+		ctx context.Context,
+		tx StudyCycleTxRepositoryContract,
+	) error,
+) error {
+	databaseTx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin study cycle transaction: %w", err)
+		return fmt.Errorf(
+			"begin study cycle transaction: %w",
+			err,
+		)
 	}
-	defer func() { _ = tx.Rollback() }()
 
-	if err := fn(ctx, &studyCycleTxRepository{tx: tx}); err != nil {
+	defer func() {
+		_ = databaseTx.Rollback()
+	}()
+
+	txRepository := &studyCycleTxRepository{
+		tx:         databaseTx,
+		outboxRepo: outbox.NewOutboxRepository(),
+	}
+
+	if err := fn(ctx, txRepository); err != nil {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit study cycle transaction: %w", err)
+	if err := databaseTx.Commit(); err != nil {
+		return fmt.Errorf(
+			"commit study cycle transaction: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
+func (t *studyCycleTxRepository) EnqueueOutboxEvent(
+	ctx context.Context,
+	event outbox.Event,
+) error {
+	if err := t.outboxRepo.Create(
+		ctx,
+		t.tx,
+		event,
+	); err != nil {
+		return fmt.Errorf(
+			"enqueue outbox event: %w",
+			err,
+		)
 	}
 
 	return nil
@@ -482,6 +526,35 @@ func (t *studyCycleTxRepository) LockCycleByID(ctx context.Context, cycleID uuid
 		return nil, fmt.Errorf("lock study cycle by id: %w", err)
 	}
 	return &cycle, nil
+}
+
+func (t *studyCycleTxRepository) GetBlockByID(ctx context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
+	var block sprintblocks.SprintBlock
+	const query = `
+		SELECT
+			id,
+			sprint_id,
+			subject_id,
+			title,
+			position,
+			status,
+			estimated_seconds,
+			started_at,
+			completed_at,
+			created_at,
+			updated_at,
+			deleted_at
+		FROM sprint_block
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`
+	if err := t.tx.GetContext(ctx, &block, query, blockID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, sprintblocks.ErrSprintBlockNotFound
+		}
+		return nil, fmt.Errorf("get sprint block by id: %w", err)
+	}
+	return &block, nil
 }
 
 func (t *studyCycleTxRepository) GetCycleTaskIDs(ctx context.Context, cycleID uuid.UUID) ([]uuid.UUID, error) {

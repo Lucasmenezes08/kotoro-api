@@ -2,11 +2,13 @@ package studycycles
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/outbox"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/google/uuid"
@@ -23,12 +25,25 @@ type fakeStudyCycleTxRepository struct {
 	updateBlockStatusFn       func(ctx context.Context, blockID uuid.UUID, status sprintblocks.SprintBlocksStatus, startedAt, completedAt *time.Time) error
 	updateTasksStatusFn       func(ctx context.Context, blockID uuid.UUID, taskIDs []uuid.UUID, status blocktasks.BlockTaskStatus, completedAt *time.Time) error
 	lockCycleByIDFn           func(ctx context.Context, cycleID uuid.UUID) (*StudyCycle, error)
+	getBlockByIDFn            func(ctx context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error)
 	getCycleTaskIDsFn         func(ctx context.Context, cycleID uuid.UUID) ([]uuid.UUID, error)
 	completeCycleTasksFn      func(ctx context.Context, cycleID uuid.UUID, completedAt time.Time) error
 	stopCycleConditionalFn    func(ctx context.Context, input StopStudyCycleModel) (*StudyCycle, error)
+	enqueueOutboxEventFn      func(ctx context.Context, event outbox.Event) error
 }
 
 var defaultTestUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+func configureFinishedEvent(t *testing.T, tx *fakeStudyCycleTxRepository) {
+	t.Helper()
+	subjectID := uuid.New()
+	tx.getBlockByIDFn = func(_ context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
+		return &sprintblocks.SprintBlock{ID: blockID, SubjectID: subjectID}, nil
+	}
+	tx.enqueueOutboxEventFn = func(_ context.Context, event outbox.Event) error {
+		return nil
+	}
+}
 
 func (f *fakeStudyCycleTxRepository) LockSprintByID(ctx context.Context, sprintID uuid.UUID) (*sprint.Sprint, error) {
 	if f.lockSprintByIDFn != nil {
@@ -104,6 +119,13 @@ func (f *fakeStudyCycleTxRepository) LockCycleByID(ctx context.Context, cycleID 
 	return f.lockCycleByIDFn(ctx, cycleID)
 }
 
+func (f *fakeStudyCycleTxRepository) GetBlockByID(ctx context.Context, blockID uuid.UUID) (*sprintblocks.SprintBlock, error) {
+	if f.getBlockByIDFn == nil {
+		panic("unexpected call to GetBlockByID")
+	}
+	return f.getBlockByIDFn(ctx, blockID)
+}
+
 func (f *fakeStudyCycleTxRepository) GetCycleTaskIDs(ctx context.Context, cycleID uuid.UUID) ([]uuid.UUID, error) {
 	if f.getCycleTaskIDsFn == nil {
 		panic("unexpected call to GetCycleTaskIDs")
@@ -123,6 +145,13 @@ func (f *fakeStudyCycleTxRepository) StopCycleConditional(ctx context.Context, i
 		panic("unexpected call to StopCycleConditional")
 	}
 	return f.stopCycleConditionalFn(ctx, input)
+}
+
+func (f *fakeStudyCycleTxRepository) EnqueueOutboxEvent(ctx context.Context, event outbox.Event) error {
+	if f.enqueueOutboxEventFn == nil {
+		panic("unexpected call to EnqueueOutboxEvent")
+	}
+	return f.enqueueOutboxEventFn(ctx, event)
 }
 
 type fakeStudyCycleRepository struct {
@@ -870,6 +899,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 				return nil
 			},
 		}
+		configureFinishedEvent(t, tx)
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
@@ -925,6 +955,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 				return nil
 			},
 		}
+		configureFinishedEvent(t, tx)
 		repo := &fakeStudyCycleRepository{tx: tx}
 		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
@@ -977,6 +1008,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 					return []blocktasks.BlockTask{{ID: uuid.New(), SprintBlockID: blockID, Status: blocktasks.TaskPending}}, nil
 				},
 			}
+			configureFinishedEvent(t, tx)
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
@@ -1038,7 +1070,9 @@ func TestStudyCycleServiceStop(t *testing.T) {
 					}, nil
 				},
 				stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
-					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, ElapsedSeconds: input.ElapsedSeconds}, nil
+					reason := input.StopReason
+					endedAt := input.EndedAt
+					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, EndedAt: &endedAt, ElapsedSeconds: input.ElapsedSeconds, StopReason: &reason}, nil
 				},
 				getCycleTaskIDsFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) {
 					return []uuid.UUID{task1}, nil
@@ -1068,6 +1102,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 					return nil
 				},
 			}
+			configureFinishedEvent(t, tx)
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
@@ -1097,7 +1132,9 @@ func TestStudyCycleServiceStop(t *testing.T) {
 					}, nil
 				},
 				stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
-					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, ElapsedSeconds: input.ElapsedSeconds}, nil
+					reason := input.StopReason
+					endedAt := input.EndedAt
+					return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: input.Status, EndedAt: &endedAt, ElapsedSeconds: input.ElapsedSeconds, StopReason: &reason}, nil
 				},
 				getCycleTaskIDsFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) {
 					return []uuid.UUID{task1, task2}, nil
@@ -1122,6 +1159,7 @@ func TestStudyCycleServiceStop(t *testing.T) {
 					return nil
 				},
 			}
+			configureFinishedEvent(t, tx)
 			repo := &fakeStudyCycleRepository{tx: tx}
 			service := NewStudyCycleServiceWithClock(repo, func() time.Time { return stopAt })
 
@@ -1245,6 +1283,105 @@ func TestStudyCycleServiceStop(t *testing.T) {
 	})
 }
 
+func TestStudyCycleServiceStopFinishedEvent(t *testing.T) {
+	fixedNow := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	cycleID := uuid.New()
+	blockID := uuid.New()
+	subjectID := uuid.New()
+	taskID := uuid.New()
+	reason := CycleStopReasonCompleted
+
+	newFinishedTx := func(enqueue func(context.Context, outbox.Event) error) *fakeStudyCycleTxRepository {
+		return &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: uuid.New(), SprintBlockID: blockID, SequenceNumber: 2, ExecutionMode: ExecutionModeSingleTask, TimerType: TimerTypeTimed, Status: StudyCycleInProgress, StartedAt: fixedNow.Add(-time.Minute), RunningSince: ptrTime(fixedNow.Add(-30 * time.Second))}, nil
+			},
+			stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: uuid.New(), SprintBlockID: blockID, SequenceNumber: 2, ExecutionMode: ExecutionModeSingleTask, TimerType: TimerTypeTimed, Status: input.Status, StartedAt: fixedNow.Add(-time.Minute), EndedAt: &input.EndedAt, ElapsedSeconds: input.ElapsedSeconds, StopReason: &reason}, nil
+			},
+			getCycleTaskIDsFn:    func(context.Context, uuid.UUID) ([]uuid.UUID, error) { return []uuid.UUID{taskID}, nil },
+			completeCycleTasksFn: func(context.Context, uuid.UUID, time.Time) error { return nil },
+			updateTasksStatusFn: func(context.Context, uuid.UUID, []uuid.UUID, blocktasks.BlockTaskStatus, *time.Time) error {
+				return nil
+			},
+			getActiveTasksByBlockIDFn: func(context.Context, uuid.UUID) ([]blocktasks.BlockTask, error) {
+				return []blocktasks.BlockTask{{ID: taskID, Status: blocktasks.TaskDone}}, nil
+			},
+			updateBlockStatusFn: func(context.Context, uuid.UUID, sprintblocks.SprintBlocksStatus, *time.Time, *time.Time) error {
+				return nil
+			},
+			getBlockByIDFn: func(context.Context, uuid.UUID) (*sprintblocks.SprintBlock, error) {
+				return &sprintblocks.SprintBlock{ID: blockID, SubjectID: subjectID}, nil
+			},
+			enqueueOutboxEventFn: enqueue,
+		}
+	}
+
+	t.Run("enqueues one analytics-complete event using the injected clock", func(t *testing.T) {
+		var events []outbox.Event
+		tx := newFinishedTx(func(_ context.Context, event outbox.Event) error {
+			events = append(events, event)
+			return nil
+		})
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
+
+		if _, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); err != nil {
+			t.Fatalf("stop cycle: %v", err)
+		}
+		if !repo.committed || len(events) != 1 {
+			t.Fatalf("expected one committed event, committed=%v events=%d", repo.committed, len(events))
+		}
+		event := events[0]
+		if event.AggregateType != outbox.AggregateTypeStudyCycle || event.AggregateID != cycleID || event.EventType != StudyCycleFinishedEventType || event.EventVersion != 1 || !event.OccurredAt.Equal(fixedNow) {
+			t.Fatalf("unexpected event envelope: %#v", event)
+		}
+		var payload StudyCycleFinishedEventV1
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		if payload.SubjectID != subjectID || payload.ElapsedSeconds != 30 || len(payload.CompletedTaskIDs) != 1 || payload.CompletedTaskIDs[0] != taskID {
+			t.Fatalf("unexpected event payload: %#v", payload)
+		}
+	})
+
+	t.Run("does not enqueue a finished event for a cancelled cycle", func(t *testing.T) {
+		tx := &fakeStudyCycleTxRepository{
+			lockCycleByIDFn: func(context.Context, uuid.UUID) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintID: uuid.New(), SprintBlockID: blockID, Status: StudyCycleInProgress, StartedAt: fixedNow, RunningSince: ptrTime(fixedNow)}, nil
+			},
+			stopCycleConditionalFn: func(_ context.Context, input StopStudyCycleModel) (*StudyCycle, error) {
+				return &StudyCycle{ID: cycleID, SprintBlockID: blockID, Status: StudyCycleCancelled, EndedAt: &input.EndedAt, StopReason: &input.StopReason}, nil
+			},
+		}
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
+		if _, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCancelled}); err != nil {
+			t.Fatalf("cancel cycle: %v", err)
+		}
+		if !repo.committed {
+			t.Fatal("expected cancelled cycle transaction to commit")
+		}
+	})
+
+	t.Run("rolls back when enqueueing fails", func(t *testing.T) {
+		enqueueErr := errors.New("outbox unavailable")
+		tx := newFinishedTx(func(context.Context, outbox.Event) error { return enqueueErr })
+		repo := &fakeStudyCycleRepository{tx: tx}
+		service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
+		if _, err := service.Stop(context.Background(), defaultTestUserID, cycleID, StopStudyCycleInput{Reason: CycleStopReasonCompleted}); !errors.Is(err, enqueueErr) {
+			t.Fatalf("expected enqueue error, got %v", err)
+		}
+		if !repo.rolledBack || repo.committed {
+			t.Fatal("expected rollback when event enqueue fails")
+		}
+	})
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
+}
+
 func TestStudyCycleServiceGetActiveAndGetAll(t *testing.T) {
 	sprintID := uuid.New()
 	cycleID := uuid.New()
@@ -1304,7 +1441,7 @@ func TestStudyCycleServiceGetActiveAndGetAll(t *testing.T) {
 func TestStudyCycleCancelledDoesNotIncrementSequence(t *testing.T) {
 	sprintID := uuid.New()
 	blockID := uuid.New()
-	fixedNow := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	fixedNow := time.Date(2099, 11, 6, 10, 0, 0, 0, time.UTC)
 
 	sp := &sprint.Sprint{
 		ID:         sprintID,
@@ -1389,6 +1526,7 @@ func TestStudyCycleCancelledDoesNotIncrementSequence(t *testing.T) {
 		},
 	}
 
+	configureFinishedEvent(t, tx)
 	repo := &fakeStudyCycleRepository{tx: tx}
 	service := NewStudyCycleServiceWithClock(repo, func() time.Time { return fixedNow })
 
