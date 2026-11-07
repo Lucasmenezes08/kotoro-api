@@ -10,7 +10,6 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-
 type Event struct {
 	ID            uuid.UUID
 	UserID        uuid.UUID
@@ -24,20 +23,73 @@ type Event struct {
 	OccurredAt    time.Time
 }
 
-type OutboxRepository struct {}
+type OutboxRepository struct{}
+
+// OutboxWriter persists events using a transaction supplied by its caller.
+// It deliberately has no transaction lifecycle methods: the domain repository
+// owns the atomic unit of work.
+type OutboxWriter interface {
+	Create(ctx context.Context, tx *sqlx.Tx, event Event) error
+}
+
+var _ OutboxWriter = (*OutboxRepository)(nil)
 
 func NewOutboxRepository() *OutboxRepository {
 	return &OutboxRepository{}
 }
 
-func (r *OutboxRepository)Create(ctx context.Context, tx *sqlx.Tx ,event Event) error{
-	query := `
-		INSERT INTO outbox_events(id, user_id, aggregate_type, aggregate_id, event_type, event_version, payload, correlation_id, causation_id, occured_at)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, now())
+func (r *OutboxRepository) Create(
+	ctx context.Context,
+	tx *sqlx.Tx,
+	event Event,
+) error {
+	const query = `
+		INSERT INTO outbox_events (
+			id,
+			user_id,
+			aggregate_type,
+			aggregate_id,
+			event_type,
+			event_version,
+			payload,
+			correlation_id,
+			causation_id,
+			occurred_at
+		)
+		VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7::jsonb,
+			$8,
+			$9,
+			$10
+		)
 	`
 
-	if _, err := tx.ExecContext(ctx, query, event.ID, event.UserID, event.AggregateType, event.AggregateID, event.EventType, event.EventVersion, event.Payload, event.CorrelationID, event.CausationID, event.OccurredAt); err != nil{
-		return fmt.Errorf("insert outbox event: %w", err)
+	_, err := tx.ExecContext(
+		ctx,
+		query,
+		event.ID,
+		event.UserID,
+		event.AggregateType,
+		event.AggregateID,
+		event.EventType,
+		event.EventVersion,
+		event.Payload,
+		event.CorrelationID,
+		event.CausationID,
+		event.OccurredAt,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"insert outbox event: %w",
+			err,
+		)
 	}
+
 	return nil
 }

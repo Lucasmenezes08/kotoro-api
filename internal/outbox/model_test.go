@@ -3,11 +3,57 @@ package outbox
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/migrations"
 	"github.com/google/uuid"
 )
+
+func TestOutboxMigrationContract(t *testing.T) {
+	content, err := fs.ReadFile(migrations.Files, "20261106183000_add_outbox_events.sql")
+	if err != nil {
+		t.Fatalf("read outbox migration: %v", err)
+	}
+	migration := string(content)
+	for _, fragment := range []string{
+		"CREATE TYPE outbox_event_status AS ENUM",
+		"id UUID PRIMARY KEY",
+		"user_id UUID NOT NULL",
+		"aggregate_type",
+		"aggregate_id",
+		"event_type",
+		"event_version",
+		"payload JSONB",
+		"correlation_id",
+		"causation_id",
+		"occurred_at",
+		"available_at",
+		"published_at",
+		"attempts",
+		"last_error",
+		"locked_at",
+		"locked_by",
+		"created_at",
+		"updated_at",
+		"CHECK (event_version > 0)",
+		"CHECK (attempts >= 0)",
+		"WHERE status = 'pending'",
+		"WHERE status = 'processing'",
+	} {
+		if !strings.Contains(migration, fragment) {
+			t.Fatalf("outbox migration missing %q", fragment)
+		}
+	}
+
+	downTable := strings.Index(migration, "DROP TABLE IF EXISTS outbox_events;")
+	downType := strings.Index(migration, "DROP TYPE IF EXISTS outbox_event_status;")
+	if downTable == -1 || downType == -1 || downTable > downType {
+		t.Fatal("outbox migration must drop the table before its enum type")
+	}
+}
 
 func TestOutboxEventStatusHelpers(t *testing.T) {
 	tests := []struct {

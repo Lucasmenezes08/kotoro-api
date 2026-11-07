@@ -28,11 +28,11 @@ const (
 )
 
 const (
-	AggregateTypeSprint     = "sprint"
-	AggregateTypeStudyCycle = "study_cycle"
-	AggregateTypeSubject    = "subject"
+	AggregateTypeSprint      = "sprint"
+	AggregateTypeStudyCycle  = "study_cycle"
+	AggregateTypeSubject     = "subject"
 	AggregateTypeSprintBlock = "sprint_block"
-	AggregateTypeBlockTask  = "block_task"
+	AggregateTypeBlockTask   = "block_task"
 )
 
 const (
