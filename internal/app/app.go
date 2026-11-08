@@ -30,6 +30,8 @@ func New(db *sqlx.DB) *Application {
 	RegisterSprintBlockRoutes(mux, db, authMiddleware)
 	RegisterBlockTaskRoutes(mux, db, authMiddleware)
 	RegisterStudyCycleRoutes(mux, db, authMiddleware)
+	RegisterHabitsRoutes(mux, db, authMiddleware)
+	RegisterAnalyticsRoutes(mux, db, authMiddleware)
 
 	handler := CorsMiddleware(mux)
 

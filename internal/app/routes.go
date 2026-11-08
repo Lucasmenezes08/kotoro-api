@@ -3,8 +3,10 @@ package app
 import (
 	"net/http"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/analytics"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	blocktasks "github.com/Lucasmenezes08/kotoro-api.git/internal/block-tasks"
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/habits"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	studycycles "github.com/Lucasmenezes08/kotoro-api.git/internal/study-cycles"
@@ -99,4 +101,23 @@ func RegisterStudyCycleRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *a
 	mux.HandleFunc("POST /study-cycles/{cycleID}/pause", authMiddleware.RequireAuth(handler.Pause))
 	mux.HandleFunc("POST /study-cycles/{cycleID}/resume", authMiddleware.RequireAuth(handler.Resume))
 	mux.HandleFunc("POST /study-cycles/{cycleID}/stop", authMiddleware.RequireAuth(handler.Stop))
+}
+
+func RegisterHabitsRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *auth.AuthMiddleware) {
+	repository := habits.NewHabitsRepository(db)
+	service := habits.NewHabitsService(repository)
+	handler := habits.NewHabitsHandler(service)
+
+	mux.HandleFunc("GET /habits/water", authMiddleware.RequireAuth(handler.GetWater))
+	mux.HandleFunc("POST /habits/water", authMiddleware.RequireAuth(handler.AddWater))
+	mux.HandleFunc("PUT /habits/water/target", authMiddleware.RequireAuth(handler.UpdateWaterTarget))
+}
+
+func RegisterAnalyticsRoutes(mux *http.ServeMux, db *sqlx.DB, authMiddleware *auth.AuthMiddleware) {
+	repository := analytics.NewAnalyticsRepository(db)
+	service := analytics.NewAnalyticsService(repository)
+	handler := analytics.NewAnalyticsHandler(service)
+
+	mux.HandleFunc("GET /analytics/subjects", authMiddleware.RequireAuth(handler.GetSubjects))
+	mux.HandleFunc("GET /analytics/streak", authMiddleware.RequireAuth(handler.GetStreak))
 }
