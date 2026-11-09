@@ -54,7 +54,14 @@ func (r *AnalyticsRepository) GetSubjectStudyTimes(
 			s.id AS subject_id,
 			s.name AS subject_name,
 			s.color AS subject_color,
-			COALESCE(SUM(sc.elapsed_seconds), 0)::int AS total_seconds
+			COALESCE(SUM(
+				CASE 
+					WHEN sc.elapsed_seconds > 0 THEN sc.elapsed_seconds
+					WHEN sb.status = 'finalizado' AND sb.started_at IS NOT NULL AND sb.completed_at IS NOT NULL 
+					     THEN EXTRACT(EPOCH FROM (sb.completed_at - sb.started_at))::int
+					ELSE 0
+				END
+			), 0)::int AS total_seconds
 		FROM subjects s
 		LEFT JOIN sprint_block sb ON sb.subject_id = s.id AND sb.deleted_at IS NULL
 		LEFT JOIN sprints sp ON sb.sprint_id = sp.id AND sp.deleted_at IS NULL AND sp.user_id = $1
@@ -104,7 +111,7 @@ func (r *AnalyticsRepository) GetStreak(
 ) (*StreakResponse, error) {
 	todayStr := refDate.Format("2006-01-02")
 
-	// Collect all study dates where user finished a sprint or performed a valid non-cancelled study cycle
+	// Collect all study dates where user finished a sprint, completed a block, or performed a valid non-cancelled study cycle
 	query := `
 		SELECT DISTINCT to_char(sp.sprint_date, 'YYYY-MM-DD') as sprint_date
 		FROM sprints sp
@@ -119,7 +126,14 @@ func (r *AnalyticsRepository) GetStreak(
 			AND sc.status != 'cancelado' 
 			AND (sc.stop_reason IS NULL OR sc.stop_reason != 'cancelado')
 			AND sc.elapsed_seconds > 0
-		WHERE sp.user_id = $1 AND sp.deleted_at IS NULL;
+		WHERE sp.user_id = $1 AND sp.deleted_at IS NULL
+
+		UNION
+
+		SELECT DISTINCT to_char(sp.sprint_date, 'YYYY-MM-DD') as sprint_date
+		FROM sprints sp
+		JOIN sprint_block sb ON sb.sprint_id = sp.id AND sb.deleted_at IS NULL
+		WHERE sp.user_id = $1 AND sp.deleted_at IS NULL AND sb.status = 'finalizado';
 	`
 
 	var activeDates []string
