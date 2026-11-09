@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -119,6 +120,57 @@ func (r *SprintBlockRepository) Update(ctx context.Context, sprintID, blockID uu
 		WHERE sprint_id = $1 AND id = $2 AND deleted_at IS NULL LIMIT 1`
 	if err := tx.GetContext(ctx, &block, selectQuery, sprintID, blockID); err != nil {
 		return nil, fmt.Errorf("get updated sprint block: %w", err)
+	}
+
+	if block.Status == Finished {
+		var existingCount int
+		_ = tx.GetContext(ctx, &existingCount, `
+			SELECT COUNT(*) FROM study_cycles 
+			WHERE sprint_block_id = $1 AND status != 'cancelado' AND (stop_reason IS NULL OR stop_reason != 'cancelado')
+		`, blockID)
+
+		if existingCount == 0 {
+			var nextSeq int
+			_ = tx.GetContext(ctx, &nextSeq, `
+				SELECT COALESCE(MAX(sequence_number), 0) + 1
+				FROM study_cycles 
+				WHERE sprint_id = $1 AND status != 'cancelado'
+			`, sprintID)
+			if nextSeq <= 0 {
+				nextSeq = 1
+			}
+
+			start := block.StartedAt
+			now := time.Now().UTC()
+			if start == nil {
+				start = &now
+			}
+			end := block.CompletedAt
+			if end == nil {
+				end = &now
+			}
+
+			elapsed := int(end.Sub(*start).Seconds())
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			if elapsed == 0 && block.EstimatedSeconds != nil && *block.EstimatedSeconds > 0 {
+				elapsed = *block.EstimatedSeconds
+			}
+
+			insertCycleQuery := `
+				INSERT INTO study_cycles (
+					sprint_id, sprint_block_id, sequence_number, execution_mode,
+					timer_type, status, planned_duration_seconds, started_at,
+					ended_at, elapsed_seconds, stop_reason, created_at, updated_at
+				) VALUES (
+					$1, $2, $3, 'bloco_materia',
+					'cronometro_livre', 'finalizado', $4, $5,
+					$6, $7, 'concluido', now(), now()
+				)
+			`
+			_, _ = tx.ExecContext(ctx, insertCycleQuery, sprintID, blockID, nextSeq, block.EstimatedSeconds, start, end, elapsed)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit update sprint block: %w", err)
