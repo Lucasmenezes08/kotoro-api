@@ -3,8 +3,10 @@ package sprintblocks
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,6 +30,8 @@ type SprintBlockRepositoryContract interface {
 	UpdateCanvasLayout(context.Context, uuid.UUID, []CanvasBlockLayoutItem) error
 	ExistsBySubjectID(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error)
 	ExistsByPosition(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error)
+	ReuseBlocks(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]SprintBlock, error)
+	ApplyFixedCycles(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID, string) ([]SprintBlock, error)
 }
 
 type SprintBlockRepository struct{ db *sqlx.DB }
@@ -321,4 +325,186 @@ func translateConstraintError(err error, operation string) error {
 		}
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (r *SprintBlockRepository) ReuseBlocks(
+	ctx context.Context,
+	targetSprintID uuid.UUID,
+	sourceSprintID uuid.UUID,
+	blockIDs []uuid.UUID,
+) ([]SprintBlock, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var maxPos int
+	_ = tx.GetContext(ctx, &maxPos, `SELECT COALESCE(MAX(position), 0) FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL`, targetSprintID)
+
+	var maxX float64
+	_ = tx.GetContext(ctx, &maxX, `SELECT COALESCE(MAX(x), 0) FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL`, targetSprintID)
+
+	var sourceBlocks []SprintBlock
+	if len(blockIDs) > 0 {
+		query, args, err := sqlx.In(`SELECT `+sprintBlockColumns+` FROM sprint_block WHERE sprint_id = ? AND id IN (?) AND deleted_at IS NULL ORDER BY position ASC`, sourceSprintID, blockIDs)
+		if err != nil {
+			return nil, err
+		}
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &sourceBlocks, query, args...); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := tx.SelectContext(ctx, &sourceBlocks, `SELECT `+sprintBlockColumns+` FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL ORDER BY position ASC`, sourceSprintID); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(sourceBlocks) == 0 {
+		return []SprintBlock{}, nil
+	}
+
+	createdBlocks := make([]SprintBlock, 0, len(sourceBlocks))
+	for i, sb := range sourceBlocks {
+		newPos := maxPos + i + 1
+		newX := maxX + float64((i+1)*360)
+		newY := sb.Y
+
+		var createdBlock SprintBlock
+		createBlockQuery := `INSERT INTO sprint_block (sprint_id, subject_id, title, position, x, y, status, estimated_seconds)
+			VALUES ($1, $2, $3, $4, $5, $6, 'pendente', $7)
+			RETURNING ` + sprintBlockColumns
+		err := tx.GetContext(ctx, &createdBlock, createBlockQuery, targetSprintID, sb.SubjectID, sb.Title, newPos, newX, newY, sb.EstimatedSeconds)
+		if err != nil {
+			return nil, translateConstraintError(err, "reuse sprint block")
+		}
+
+		type taskRow struct {
+			Title            string  `db:"title"`
+			Description      *string `db:"description"`
+			Position         int     `db:"position"`
+			Priority         string  `db:"priority"`
+			EstimatedSeconds *int    `db:"estimated_seconds"`
+		}
+		var tasks []taskRow
+		err = tx.SelectContext(ctx, &tasks, `SELECT title, description, position, priority, estimated_seconds FROM block_tasks WHERE sprint_block_id = $1 AND deleted_at IS NULL ORDER BY position ASC`, sb.ID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+
+		for _, t := range tasks {
+			insertTask := `INSERT INTO block_tasks (sprint_block_id, title, description, position, status, priority, estimated_seconds)
+				VALUES ($1, $2, $3, $4, 'pendente', $5, $6)`
+			_, err := tx.ExecContext(ctx, insertTask, createdBlock.ID, t.Title, t.Description, t.Position, t.Priority, t.EstimatedSeconds)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		createdBlocks = append(createdBlocks, createdBlock)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return createdBlocks, nil
+}
+
+func (r *SprintBlockRepository) ApplyFixedCycles(
+	ctx context.Context,
+	targetSprintID, userID uuid.UUID,
+	fixedCycleIDs []uuid.UUID,
+	dayOfWeek string,
+) ([]SprintBlock, error) {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for apply fixed cycles: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPos int
+	if err := tx.GetContext(ctx, &maxPos, `SELECT COALESCE(MAX(position), 0) FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL`, targetSprintID); err != nil {
+		return nil, fmt.Errorf("get max position: %w", err)
+	}
+
+	var maxX float64
+	if err := tx.GetContext(ctx, &maxX, `SELECT COALESCE(MAX(x), 0) FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL`, targetSprintID); err != nil {
+		return nil, fmt.Errorf("get max x: %w", err)
+	}
+
+	type fixedCycleRow struct {
+		ID               uuid.UUID       `db:"id"`
+		SubjectID        uuid.UUID       `db:"subject_id"`
+		Title            string          `db:"title"`
+		EstimatedSeconds int             `db:"estimated_seconds"`
+		Tasks            json.RawMessage `db:"tasks"`
+	}
+
+	var cycles []fixedCycleRow
+	if len(fixedCycleIDs) > 0 {
+		query, args, err := sqlx.In(`SELECT id, subject_id, title, estimated_seconds, tasks
+			FROM fixed_cycles
+			WHERE user_id = ? AND deleted_at IS NULL AND id IN (?)
+			ORDER BY created_at ASC`, userID, fixedCycleIDs)
+		if err != nil {
+			return nil, err
+		}
+		query = tx.Rebind(query)
+		if err := tx.SelectContext(ctx, &cycles, query, args...); err != nil {
+			return nil, err
+		}
+	} else {
+		query := `SELECT id, subject_id, title, estimated_seconds, tasks
+			FROM fixed_cycles
+			WHERE user_id = $1 AND deleted_at IS NULL AND (day_of_week = 'all' OR day_of_week = $2)
+			ORDER BY created_at ASC`
+		if err := tx.SelectContext(ctx, &cycles, query, userID, dayOfWeek); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(cycles) == 0 {
+		return []SprintBlock{}, nil
+	}
+
+	createdBlocks := make([]SprintBlock, 0, len(cycles))
+	for i, c := range cycles {
+		newPos := maxPos + i + 1
+		newX := maxX + float64((i+1)*360)
+		newY := float64(0)
+
+		var createdBlock SprintBlock
+		createBlockQuery := `INSERT INTO sprint_block (sprint_id, subject_id, title, position, x, y, status, estimated_seconds)
+			VALUES ($1, $2, $3, $4, $5, $6, 'pendente', $7)
+			RETURNING ` + sprintBlockColumns
+		err := tx.GetContext(ctx, &createdBlock, createBlockQuery, targetSprintID, c.SubjectID, c.Title, newPos, newX, newY, c.EstimatedSeconds)
+		if err != nil {
+			return nil, translateConstraintError(err, "apply fixed cycle block")
+		}
+
+		var taskStrings []string
+		if len(c.Tasks) > 0 {
+			_ = json.Unmarshal(c.Tasks, &taskStrings)
+		}
+
+		for j, taskTitle := range taskStrings {
+			if strings.TrimSpace(taskTitle) == "" {
+				continue
+			}
+			insertTask := `INSERT INTO block_tasks (sprint_block_id, title, position, status, priority, estimated_seconds)
+				VALUES ($1, $2, $3, 'pendente', 'media', 0)`
+			_, err := tx.ExecContext(ctx, insertTask, createdBlock.ID, strings.TrimSpace(taskTitle), j+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		createdBlocks = append(createdBlocks, createdBlock)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return createdBlocks, nil
 }

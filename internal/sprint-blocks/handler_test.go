@@ -67,6 +67,12 @@ func (f *fakeBlockService) UpdateCanvasLayout(ctx context.Context, userID, sprin
 	}
 	return nil
 }
+func (f *fakeBlockService) ReuseBlocks(ctx context.Context, userID, targetSprintID, sourceSprintID uuid.UUID, blockIDs []uuid.UUID) ([]SprintBlock, error) {
+	return nil, nil
+}
+func (f *fakeBlockService) ApplyFixedCycles(ctx context.Context, userID, targetSprintID uuid.UUID, fixedCycleIDs []uuid.UUID) ([]SprintBlock, error) {
+	return nil, nil
+}
 
 func blockRequest(method, target, body string, sprintID, blockID uuid.UUID) *http.Request {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
