@@ -8,16 +8,26 @@ import (
 type Color string
 
 const (
-	ColorGreen  Color = "green"
-	ColorRed    Color = "red"
-	ColorBlue   Color = "blue"
-	ColorOrange Color = "orange"
-	ColorBlack  Color = "black"
-	ColorGray   Color = "gray"
-	ColorPurple Color = "purple"
-	ColorWhite  Color = "white"
-	ColorPink   Color = "pink"
-	ColorYellow Color = "yellow"
+	ColorGreen   Color = "green"
+	ColorRed     Color = "red"
+	ColorBlue    Color = "blue"
+	ColorOrange  Color = "orange"
+	ColorBlack   Color = "black"
+	ColorGray    Color = "gray"
+	ColorPurple  Color = "purple"
+	ColorWhite   Color = "white"
+	ColorPink    Color = "pink"
+	ColorYellow  Color = "yellow"
+	ColorTeal    Color = "teal"
+	ColorCyan    Color = "cyan"
+	ColorIndigo  Color = "indigo"
+	ColorEmerald Color = "emerald"
+	ColorAmber   Color = "amber"
+	ColorRose    Color = "rose"
+	ColorLime    Color = "lime"
+	ColorViolet  Color = "violet"
+	ColorFuchsia Color = "fuchsia"
+	ColorBrown   Color = "brown"
 )
 
 type Subject struct {
