@@ -493,7 +493,7 @@ func (r *SprintBlockRepository) ApplyFixedCycles(
 				continue
 			}
 			insertTask := `INSERT INTO block_tasks (sprint_block_id, title, position, status, priority, estimated_seconds)
-				VALUES ($1, $2, $3, 'pendente', 'media', 0)`
+				VALUES ($1, $2, $3, 'pendente', 'media', NULL)`
 			_, err := tx.ExecContext(ctx, insertTask, createdBlock.ID, strings.TrimSpace(taskTitle), j+1)
 			if err != nil {
 				return nil, err
