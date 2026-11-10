@@ -29,6 +29,7 @@ var (
 	ErrInvalidSprintBlockOrder            = errors.New("invalid sprint block order")
 	ErrSprintBlockStatusInvalid           = errors.New("sprint block status is invalid")
 	ErrSprintBlockTimeRangeInvalid        = errors.New("started_at must be before completed_at")
+	ErrFixedCyclesAlreadyApplied          = errors.New("fixed cycles have already been applied to this sprint")
 )
 
 type sprintReader interface {
@@ -308,6 +309,9 @@ func (s *SprintBlockService) ApplyFixedCycles(
 	sp, err := s.requireEditableSprint(ctx, userID, targetSprintID)
 	if err != nil {
 		return nil, err
+	}
+	if sp.FixedCyclesApplied {
+		return nil, ErrFixedCyclesAlreadyApplied
 	}
 
 	var dayOfWeek string

@@ -475,6 +475,14 @@ func (r *SprintBlockRepository) ApplyFixedCycles(
 	}
 	defer tx.Rollback()
 
+	var fixedCyclesApplied bool
+	if err := tx.GetContext(ctx, &fixedCyclesApplied, `SELECT fixed_cycles_applied FROM sprints WHERE id = $1 AND deleted_at IS NULL`, targetSprintID); err != nil {
+		return nil, fmt.Errorf("check sprint fixed_cycles_applied: %w", err)
+	}
+	if fixedCyclesApplied {
+		return nil, ErrFixedCyclesAlreadyApplied
+	}
+
 	var maxPos int
 	if err := tx.GetContext(ctx, &maxPos, `SELECT COALESCE(MAX(position), 0) FROM sprint_block WHERE sprint_id = $1 AND deleted_at IS NULL`, targetSprintID); err != nil {
 		return nil, fmt.Errorf("get max position: %w", err)
@@ -553,6 +561,10 @@ func (r *SprintBlockRepository) ApplyFixedCycles(
 		}
 
 		createdBlocks = append(createdBlocks, createdBlock)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE sprints SET fixed_cycles_applied = TRUE, updated_at = now() WHERE id = $1`, targetSprintID); err != nil {
+		return nil, fmt.Errorf("update sprint fixed_cycles_applied: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -355,6 +355,8 @@ func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operat
 		errors.Is(err, subject.ErrSubjectNotFound),
 		errors.Is(err, ErrSprintBlockNotFound):
 		utils.WriteJson(w, http.StatusNotFound, sprintBlockErrorResponse{Error: err.Error()})
+	case errors.Is(err, ErrFixedCyclesAlreadyApplied):
+		utils.WriteJson(w, http.StatusConflict, sprintBlockErrorResponse{Error: "Ciclos fixos já foram aplicados a esta sprint"})
 	case errors.Is(err, ErrSprintNotInPlanning),
 		errors.Is(err, ErrSprintBlockNotEditable),
 		errors.Is(err, ErrSprintBlockPositionConflict),
