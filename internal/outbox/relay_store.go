@@ -95,14 +95,134 @@ func (s *RelayStore) ClaimBatch(
 	return events, nil
 }
 
+const maxLastErrorLength = 2048
+
+func sanitizeLastError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if len(msg) > maxLastErrorLength {
+		return msg[:maxLastErrorLength]
+	}
+	return msg
+}
+
 func (s *RelayStore) MarkPublished(ctx context.Context, eventID uuid.UUID, relayID string, publishedAt time.Time) error {
+	if eventID == uuid.Nil {
+		return errors.New("event ID is required")
+	}
+	if strings.TrimSpace(relayID) == "" {
+		return ErrInvalidRelayID
+	}
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
+	}
+
+	const query = `
+		UPDATE outbox_events
+		SET status = 'published',
+		    published_at = $1,
+		    locked_at = NULL,
+		    locked_until = NULL,
+		    locked_by = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2
+		  AND status = 'processing'
+		  AND locked_by = $3
+	`
+
+	res, err := s.db.ExecContext(ctx, query, publishedAt, eventID, relayID)
+	if err != nil {
+		return fmt.Errorf("mark published: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected for mark published: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: event %s not in processing or not owned by %s", ErrLeaseLost, eventID, relayID)
+	}
+
 	return nil
 }
 
 func (s *RelayStore) ScheduleRetry(ctx context.Context, eventID uuid.UUID, relayID string, availableAt time.Time, lastError string) error {
+	if eventID == uuid.Nil {
+		return errors.New("event ID is required")
+	}
+	if strings.TrimSpace(relayID) == "" {
+		return ErrInvalidRelayID
+	}
+	if availableAt.IsZero() {
+		return errors.New("availableAt is required")
+	}
+
+	sanitizedErr := sanitizeLastError(lastError)
+
+	const query = `
+		UPDATE outbox_events
+		SET status = 'pending',
+		    available_at = $1,
+		    last_error = $2,
+		    locked_at = NULL,
+		    locked_until = NULL,
+		    locked_by = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $3
+		  AND status = 'processing'
+		  AND locked_by = $4
+	`
+
+	res, err := s.db.ExecContext(ctx, query, availableAt, sanitizedErr, eventID, relayID)
+	if err != nil {
+		return fmt.Errorf("schedule retry: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected for schedule retry: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: event %s not in processing or not owned by %s", ErrLeaseLost, eventID, relayID)
+	}
+
 	return nil
 }
 
 func (s *RelayStore) MarkFailed(ctx context.Context, eventID uuid.UUID, relayID string, lastError string) error {
+	if eventID == uuid.Nil {
+		return errors.New("event ID is required")
+	}
+	if strings.TrimSpace(relayID) == "" {
+		return ErrInvalidRelayID
+	}
+
+	sanitizedErr := sanitizeLastError(lastError)
+
+	const query = `
+		UPDATE outbox_events
+		SET status = 'failed',
+		    last_error = $1,
+		    locked_at = NULL,
+		    locked_until = NULL,
+		    locked_by = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2
+		  AND status = 'processing'
+		  AND locked_by = $3
+	`
+
+	res, err := s.db.ExecContext(ctx, query, sanitizedErr, eventID, relayID)
+	if err != nil {
+		return fmt.Errorf("mark failed: %w", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected for mark failed: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: event %s not in processing or not owned by %s", ErrLeaseLost, eventID, relayID)
+	}
+
 	return nil
 }

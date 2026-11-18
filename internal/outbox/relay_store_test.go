@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -529,6 +530,265 @@ func TestRelayStoreClaimBatchIntegration(t *testing.T) {
 			if _, ok := claimedIDs[id]; !ok {
 				t.Errorf("event %s was not claimed by any worker", id)
 			}
+		}
+	})
+}
+
+func TestRelayStoreTransitionsIntegration(t *testing.T) {
+	db := openTestDB(t)
+	store := NewRelayStore(db)
+	ctx := context.Background()
+
+	t.Run("MarkPublished atualiza status, limpa locks e preenche published_at", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		relayID := "relay-pub-owner"
+		lockedUntil := now.Add(time.Minute)
+		eventID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeStudyCycle,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeStudyCycleFinished,
+			Status:        StatusProcessing,
+			OccurredAt:    now.Add(-time.Minute),
+			AvailableAt:   now.Add(-time.Minute),
+			LockedAt:      &now,
+			LockedBy:      &relayID,
+			LockedUntil:   &lockedUntil,
+			Attempts:      1,
+		})
+
+		publishedAt := now.Add(2 * time.Second)
+		err := store.MarkPublished(ctx, eventID, relayID, publishedAt)
+		if err != nil {
+			t.Fatalf("MarkPublished failed: %v", err)
+		}
+
+		var event OutboxEvent
+		err = db.GetContext(ctx, &event, `SELECT * FROM outbox_events WHERE id = $1`, eventID)
+		if err != nil {
+			t.Fatalf("get event: %v", err)
+		}
+
+		if event.Status != StatusPublished {
+			t.Errorf("expected status published, got %s", event.Status)
+		}
+		if event.PublishedAt == nil || event.PublishedAt.IsZero() {
+			t.Errorf("expected published_at populated, got %v", event.PublishedAt)
+		}
+		if event.LockedAt != nil || event.LockedBy != nil || event.LockedUntil != nil {
+			t.Errorf("expected locks cleared, got locked_at=%v locked_by=%v locked_until=%v",
+				event.LockedAt, event.LockedBy, event.LockedUntil)
+		}
+	})
+
+	t.Run("ScheduleRetry reagenda evento, limpa locks e grava last_error", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		relayID := "relay-retry-owner"
+		lockedUntil := now.Add(time.Minute)
+		eventID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeSprint,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeSprintStarted,
+			Status:        StatusProcessing,
+			OccurredAt:    now.Add(-time.Minute),
+			AvailableAt:   now.Add(-time.Minute),
+			LockedAt:      &now,
+			LockedBy:      &relayID,
+			LockedUntil:   &lockedUntil,
+			Attempts:      1,
+		})
+
+		retryAt := now.Add(10 * time.Second)
+		err := store.ScheduleRetry(ctx, eventID, relayID, retryAt, "connection timeout to broker")
+		if err != nil {
+			t.Fatalf("ScheduleRetry failed: %v", err)
+		}
+
+		var event OutboxEvent
+		err = db.GetContext(ctx, &event, `SELECT * FROM outbox_events WHERE id = $1`, eventID)
+		if err != nil {
+			t.Fatalf("get event: %v", err)
+		}
+
+		if event.Status != StatusPending {
+			t.Errorf("expected status pending, got %s", event.Status)
+		}
+		if event.LastError == nil || *event.LastError != "connection timeout to broker" {
+			t.Errorf("expected last_error populated, got %v", event.LastError)
+		}
+		if event.LockedAt != nil || event.LockedBy != nil || event.LockedUntil != nil {
+			t.Errorf("expected locks cleared, got locked_at=%v locked_by=%v locked_until=%v",
+				event.LockedAt, event.LockedBy, event.LockedUntil)
+		}
+	})
+
+	t.Run("MarkFailed define status failed, preserva erro e limpa locks", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		relayID := "relay-fail-owner"
+		lockedUntil := now.Add(time.Minute)
+		eventID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeStudyCycle,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeStudyCycleFinished,
+			Status:        StatusProcessing,
+			OccurredAt:    now.Add(-time.Minute),
+			AvailableAt:   now.Add(-time.Minute),
+			LockedAt:      &now,
+			LockedBy:      &relayID,
+			LockedUntil:   &lockedUntil,
+			Attempts:      10,
+		})
+
+		err := store.MarkFailed(ctx, eventID, relayID, "max attempts reached: permanent broker failure")
+		if err != nil {
+			t.Fatalf("MarkFailed failed: %v", err)
+		}
+
+		var event OutboxEvent
+		err = db.GetContext(ctx, &event, `SELECT * FROM outbox_events WHERE id = $1`, eventID)
+		if err != nil {
+			t.Fatalf("get event: %v", err)
+		}
+
+		if event.Status != StatusFailed {
+			t.Errorf("expected status failed, got %s", event.Status)
+		}
+		if event.LastError == nil || *event.LastError != "max attempts reached: permanent broker failure" {
+			t.Errorf("expected last_error populated, got %v", event.LastError)
+		}
+		if event.LockedAt != nil || event.LockedBy != nil || event.LockedUntil != nil {
+			t.Errorf("expected locks cleared, got locked_at=%v locked_by=%v locked_until=%v",
+				event.LockedAt, event.LockedBy, event.LockedUntil)
+		}
+	})
+
+	t.Run("relayID incorreto nao atualiza e retorna ErrLeaseLost", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		correctOwner := "relay-correct"
+		wrongOwner := "relay-wrong"
+		lockedUntil := now.Add(time.Minute)
+		eventID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeStudyCycle,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeStudyCycleFinished,
+			Status:        StatusProcessing,
+			OccurredAt:    now.Add(-time.Minute),
+			AvailableAt:   now.Add(-time.Minute),
+			LockedAt:      &now,
+			LockedBy:      &correctOwner,
+			LockedUntil:   &lockedUntil,
+			Attempts:      1,
+		})
+
+		err := store.MarkPublished(ctx, eventID, wrongOwner, now)
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost for wrong relay ID, got %v", err)
+		}
+
+		err = store.ScheduleRetry(ctx, eventID, wrongOwner, now.Add(time.Second), "err")
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost for wrong relay ID, got %v", err)
+		}
+
+		err = store.MarkFailed(ctx, eventID, wrongOwner, "err")
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost for wrong relay ID, got %v", err)
+		}
+	})
+
+	t.Run("status incorreto nao atualiza e retorna ErrLeaseLost", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		relayID := "relay-status-test"
+
+		// Event in pending status
+		pendingID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeSprint,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeSprintStarted,
+			Status:        StatusPending,
+			OccurredAt:    now,
+			AvailableAt:   now,
+		})
+
+		err := store.MarkPublished(ctx, pendingID, relayID, now)
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost when marking non-processing event, got %v", err)
+		}
+	})
+
+	t.Run("worker atrasado nao altera evento recuperado por outro relay", func(t *testing.T) {
+		userID := createTestUser(t, db)
+		now := time.Now().UTC()
+		slowRelay := "relay-slow"
+		fastRelay := "relay-fast"
+
+		// 1. Event was claimed by relay-slow, but its lease expired
+		expiredUntil := now.Add(-10 * time.Second)
+		lockedAt := now.Add(-70 * time.Second)
+		eventID := insertTestEvent(t, db, OutboxEvent{
+			UserID:        userID,
+			AggregateType: AggregateTypeStudyCycle,
+			AggregateID:   uuid.New(),
+			EventType:     EventTypeStudyCycleFinished,
+			Status:        StatusProcessing,
+			OccurredAt:    now.Add(-80 * time.Second),
+			AvailableAt:   now.Add(-80 * time.Second),
+			LockedAt:      &lockedAt,
+			LockedBy:      &slowRelay,
+			LockedUntil:   &expiredUntil,
+			Attempts:      1,
+		})
+
+		// 2. relay-fast recovers the event via ClaimBatch
+		events, err := store.ClaimBatch(ctx, fastRelay, 10, time.Minute)
+		if err != nil {
+			t.Fatalf("claim failed: %v", err)
+		}
+
+		var claimed bool
+		for _, e := range events {
+			if e.ID == eventID {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			t.Fatalf("expected event %s to be recovered by relay-fast", eventID)
+		}
+
+		// 3. relay-slow wakes up late and tries to acknowledge completion or retry
+		err = store.MarkPublished(ctx, eventID, slowRelay, now)
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost when slow worker attempts MarkPublished, got %v", err)
+		}
+
+		err = store.ScheduleRetry(ctx, eventID, slowRelay, now.Add(time.Minute), "late failure")
+		if !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("expected ErrLeaseLost when slow worker attempts ScheduleRetry, got %v", err)
+		}
+
+		// 4. Verify in DB that event is still intact and owned by fastRelay
+		var dbStatus OutboxEventStatus
+		var dbLockedBy string
+		err = db.QueryRowContext(ctx, `SELECT status, locked_by FROM outbox_events WHERE id = $1`, eventID).
+			Scan(&dbStatus, &dbLockedBy)
+		if err != nil {
+			t.Fatalf("query db: %v", err)
+		}
+		if dbStatus != StatusProcessing {
+			t.Errorf("db status altered by slow worker: got %s, want processing", dbStatus)
+		}
+		if dbLockedBy != fastRelay {
+			t.Errorf("ownership stolen by slow worker: got %s, want %s", dbLockedBy, fastRelay)
 		}
 	})
 }
