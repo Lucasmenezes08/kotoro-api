@@ -76,6 +76,7 @@ type OutboxEvent struct {
 	LastError     *string           `db:"last_error" json:"last_error,omitempty"`
 	LockedAt      *time.Time        `db:"locked_at" json:"locked_at,omitempty"`
 	LockedBy      *string           `db:"locked_by" json:"locked_by,omitempty"`
+	LockedUntil   *time.Time        `db:"locked_until" json:"locked_until,omitempty"`
 	CreatedAt     time.Time         `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time         `db:"updated_at" json:"updated_at"`
 }

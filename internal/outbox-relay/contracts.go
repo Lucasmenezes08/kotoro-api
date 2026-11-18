@@ -19,3 +19,5 @@ type Publisher interface {
 	Publish(ctx context.Context, event outbox.OutboxEvent) error
 	Close() error
 }
+
+var _ Store = (*outbox.RelayStore)(nil)
