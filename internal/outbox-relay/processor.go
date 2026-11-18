@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -173,6 +174,7 @@ func (p *Processor) ProcessEvent(ctx context.Context, event outbox.OutboxEvent) 
 			// The message cannot be un-published from RabbitMQ; consumers must be idempotent.
 			return fmt.Errorf("mark published: %w", markErr)
 		}
+		slog.Info("event published to rabbitmq", "relay_id", p.relayID, "event_id", event.ID, "event_type", event.EventType)
 		return nil
 	}
 
@@ -183,6 +185,7 @@ func (p *Processor) ProcessEvent(ctx context.Context, event outbox.OutboxEvent) 
 		if schedErr := p.store.ScheduleRetry(ctx, event.ID, p.relayID, availableAt, err.Error()); schedErr != nil {
 			return fmt.Errorf("schedule retry: %w", schedErr)
 		}
+		slog.Warn("publish failed; retry scheduled", "relay_id", p.relayID, "event_id", event.ID, "attempts", event.Attempts, "backoff", backoff, "error", err)
 		return nil
 	}
 
@@ -190,5 +193,6 @@ func (p *Processor) ProcessEvent(ctx context.Context, event outbox.OutboxEvent) 
 	if failErr := p.store.MarkFailed(ctx, event.ID, p.relayID, err.Error()); failErr != nil {
 		return fmt.Errorf("mark failed: %w", failErr)
 	}
+	slog.Error("event failed permanently", "relay_id", p.relayID, "event_id", event.ID, "attempts", event.Attempts, "error", err)
 	return nil
 }
