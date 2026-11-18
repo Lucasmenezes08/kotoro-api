@@ -74,6 +74,11 @@ func (wp *WorkerPool) JobsChannel() <-chan outbox.OutboxEvent {
 	return wp.jobs
 }
 
+// RawJobsChannel returns the bidirectional jobs channel for wiring with the dispatcher.
+func (wp *WorkerPool) RawJobsChannel() chan outbox.OutboxEvent {
+	return wp.jobs
+}
+
 // Start launches the fixed pool of workers. Each worker is assigned its own
 // dedicated Publisher to guarantee no concurrent AMQP channel sharing.
 func (wp *WorkerPool) Start(ctx context.Context) error {
