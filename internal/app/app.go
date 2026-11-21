@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -13,17 +15,28 @@ type Application struct {
 }
 
 func New(db *sqlx.DB) *Application {
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "kotoro-default-jwt-secret-key-change-me-in-production"
+	}
+	tokenProvider := auth.NewJWTTokenProvider(jwtSecret, 24*time.Hour)
+	authMiddleware := auth.NewAuthMiddleware(tokenProvider)
+
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
-	RegisterSubjectsRoutes(mux, db)
-	RegisterSprintRoutes(mux, db)
-	RegisterSprintBlockRoutes(mux, db)
-	RegisterBlockTaskRoutes(mux, db)
+	RegisterAuthRoutes(mux, db, authMiddleware, tokenProvider)
+	RegisterSubjectsRoutes(mux, db, authMiddleware)
+	RegisterSprintRoutes(mux, db, authMiddleware)
+	RegisterSprintBlockRoutes(mux, db, authMiddleware)
+	RegisterBlockTaskRoutes(mux, db, authMiddleware)
+	RegisterStudyCycleRoutes(mux, db, authMiddleware)
+
+	handler := CorsMiddleware(mux)
 
 	return &Application{
 		server: &http.Server{
 			Addr:              ":8080",
-			Handler:           mux,
+			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      10 * time.Second,
 			IdleTimeout:       60 * time.Second,

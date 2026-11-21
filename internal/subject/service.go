@@ -32,13 +32,15 @@ type SubjectBatchResult struct {
 	Err     error
 }
 
-type SubjectContract interface {
-	Create(ctx context.Context, subject SubjectCreateInput) error
-	GetAll(ctx context.Context) ([]Subject, error)
-	Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
-	CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
+type SubjectServiceContract interface {
+	Create(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error
+	GetAll(ctx context.Context, userID uuid.UUID) ([]Subject, error)
+	Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error
+	DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error
+	CreateBatch(ctx context.Context, userID uuid.UUID, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
 }
+
+type SubjectContract = SubjectServiceContract
 
 type SubjectService struct {
 	repository SubjectRepositoryContract
@@ -50,15 +52,15 @@ func NewSubjectService(repository SubjectRepositoryContract) *SubjectService {
 	}
 }
 
-func (s *SubjectService) GetAll(ctx context.Context) ([]Subject, error) {
-	sub, err := s.repository.GetAll(ctx)
+func (s *SubjectService) GetAll(ctx context.Context, userID uuid.UUID) ([]Subject, error) {
+	sub, err := s.repository.GetAll(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("error to get all subjects, error, %w", err)
 	}
 	return sub, nil
 }
 
-func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput) error {
+func (s *SubjectService) Create(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error {
 	if strings.TrimSpace(subject.Name) == "" {
 		return ErrSubjectRequiredName
 	}
@@ -67,7 +69,7 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 		return ErrSubjectRequiredColor
 	}
 
-	duplicate, err := s.repository.GetByName(ctx, subject.Name)
+	duplicate, err := s.repository.GetByName(ctx, userID, subject.Name)
 	if err != nil && !errors.Is(err, ErrSubjectNotFound) {
 		return fmt.Errorf("check subject name: %w", err)
 	}
@@ -80,13 +82,13 @@ func (s *SubjectService) Create(ctx context.Context, subject SubjectCreateInput)
 		return err
 	}
 
-	if err := s.repository.Create(ctx, subject); err != nil {
+	if err := s.repository.Create(ctx, userID, subject); err != nil {
 		return fmt.Errorf("error to create subject, error, %w\n", err)
 	}
 	return nil
 }
 
-func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
+func (s *SubjectService) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error {
 	if input.Name == nil && input.Color == nil {
 		return ErrSubjectUpdateEmpty
 	}
@@ -96,7 +98,7 @@ func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input Subject
 			return ErrSubjectRequiredName
 		}
 
-		duplicate, err := s.repository.GetByName(ctx, *input.Name)
+		duplicate, err := s.repository.GetByName(ctx, userID, *input.Name)
 		if err != nil && !errors.Is(err, ErrSubjectNotFound) {
 			return fmt.Errorf("check subject name: %w", err)
 		}
@@ -115,21 +117,21 @@ func (s *SubjectService) Update(ctx context.Context, id uuid.UUID, input Subject
 		}
 	}
 
-	if err := s.repository.Update(ctx, id, input); err != nil {
+	if err := s.repository.Update(ctx, userID, id, input); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
 }
 
-func (s *SubjectService) DeleteById(ctx context.Context, id uuid.UUID) error {
-	if err := s.repository.DeleteById(ctx, id); err != nil {
+func (s *SubjectService) DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error {
+	if err := s.repository.DeleteById(ctx, userID, id); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *SubjectService) CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error) {
+func (s *SubjectService) CreateBatch(ctx context.Context, userID uuid.UUID, subjects []SubjectCreateInput) ([]SubjectBatchResult, error) {
 	if len(subjects) == 0 {
 		return []SubjectBatchResult{}, nil
 	}
@@ -147,7 +149,7 @@ func (s *SubjectService) CreateBatch(ctx context.Context, subjects []SubjectCrea
 	wg.Add(workerCount)
 
 	for i := 0; i < workerCount; i++ {
-		go s.workerCreateSubjects(ctx, jobs, results, &wg)
+		go s.workerCreateSubjects(ctx, userID, jobs, results, &wg)
 	}
 
 	go func() {
@@ -188,7 +190,7 @@ func (s *SubjectService) CreateBatch(ctx context.Context, subjects []SubjectCrea
 	return batchResults, nil
 }
 
-func (s *SubjectService) workerCreateSubjects(ctx context.Context, subjectjobs <-chan SubjectBatchJob, subjectJobResult chan<- SubjectBatchResult, wg *sync.WaitGroup) {
+func (s *SubjectService) workerCreateSubjects(ctx context.Context, userID uuid.UUID, subjectjobs <-chan SubjectBatchJob, subjectJobResult chan<- SubjectBatchResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -201,7 +203,7 @@ func (s *SubjectService) workerCreateSubjects(ctx context.Context, subjectjobs <
 				return
 			}
 
-			err := s.Create(ctx, job.Subject)
+			err := s.Create(ctx, userID, job.Subject)
 
 			result := SubjectBatchResult{
 				Index:   job.Index,

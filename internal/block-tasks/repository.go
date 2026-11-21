@@ -92,10 +92,12 @@ func (r *BlockTaskRepository) Update(ctx context.Context, blockID, taskID uuid.U
 		position = COALESCE($4::integer, position),
 		priority = COALESCE($5::block_task_priority, priority),
 		estimated_seconds = COALESCE($6::integer, estimated_seconds),
+		status = COALESCE($7::block_task_status, status),
+		completed_at = CASE WHEN $8::boolean THEN $9::timestamptz ELSE completed_at END,
 		updated_at = now()
-		WHERE sprint_block_id = $7 AND id = $8 AND deleted_at IS NULL`
+		WHERE sprint_block_id = $10 AND id = $11 AND deleted_at IS NULL`
 	result, err := tx.ExecContext(ctx, query, input.Title, input.DescriptionSet, input.Description,
-		input.Position, input.Priority, input.EstimatedSeconds, blockID, taskID)
+		input.Position, input.Priority, input.EstimatedSeconds, input.Status, input.CompletedAtSet, input.CompletedAt, blockID, taskID)
 	if err != nil {
 		return nil, translateBlockTaskConstraintError(err, "update block task")
 	}

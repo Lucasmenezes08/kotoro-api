@@ -9,64 +9,65 @@ import (
 )
 
 type fakeSubjectRepository struct {
-	createFn      func(ctx context.Context, subject SubjectCreateInput) error
-	getAllFn      func(ctx context.Context) ([]Subject, error)
-	getByNameFn   func(ctx context.Context, name string) (*Subject, error)
-	updateFn      func(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error
-	deleteByIdFn  func(ctx context.Context, id uuid.UUID) error
-	createBatchFn func(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error)
+	createFn      func(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error
+	getAllFn      func(ctx context.Context, userID uuid.UUID) ([]Subject, error)
+	getByIdFn     func(ctx context.Context, id uuid.UUID) (*Subject, error)
+	getByNameFn   func(ctx context.Context, userID uuid.UUID, name string) (*Subject, error)
+	updateFn      func(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error
+	deleteByIdFn  func(ctx context.Context, userID uuid.UUID, id uuid.UUID) error
 }
 
-func (r *fakeSubjectRepository) Create(ctx context.Context, subject SubjectCreateInput) error {
+func (r *fakeSubjectRepository) Create(ctx context.Context, userID uuid.UUID, subject SubjectCreateInput) error {
 	if r.createFn == nil {
 		panic("unexpected call to create")
 	}
-
-	return r.createFn(ctx, subject)
+	return r.createFn(ctx, userID, subject)
 }
 
-func (r *fakeSubjectRepository) GetAll(ctx context.Context) ([]Subject, error) {
+func (r *fakeSubjectRepository) GetAll(ctx context.Context, userID uuid.UUID) ([]Subject, error) {
 	if r.getAllFn == nil {
 		panic("unexpected call to get")
 	}
-	return r.getAllFn(ctx)
+	return r.getAllFn(ctx, userID)
 }
 
-func (r *fakeSubjectRepository) GetByName(ctx context.Context, name string) (*Subject, error) {
+func (r *fakeSubjectRepository) GetById(ctx context.Context, id uuid.UUID) (*Subject, error) {
+	if r.getByIdFn == nil {
+		panic("unexpected call to getById")
+	}
+	return r.getByIdFn(ctx, id)
+}
+
+func (r *fakeSubjectRepository) GetByName(ctx context.Context, userID uuid.UUID, name string) (*Subject, error) {
 	if r.getByNameFn == nil {
 		panic("unexpected call to get by name")
 	}
-	return r.getByNameFn(ctx, name)
+	return r.getByNameFn(ctx, userID, name)
 }
 
-func (r *fakeSubjectRepository) Update(ctx context.Context, id uuid.UUID, input SubjectUpdateInput) error {
+func (r *fakeSubjectRepository) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, input SubjectUpdateInput) error {
 	if r.updateFn == nil {
 		panic("unexpected call to update")
 	}
-	return r.updateFn(ctx, id, input)
+	return r.updateFn(ctx, userID, id, input)
 }
 
-func (r *fakeSubjectRepository) DeleteById(ctx context.Context, id uuid.UUID) error {
+func (r *fakeSubjectRepository) DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error {
 	if r.deleteByIdFn == nil {
 		panic("unexpected call to deleteById")
 	}
-	return r.deleteByIdFn(ctx, id)
+	return r.deleteByIdFn(ctx, userID, id)
 }
 
-func (r *fakeSubjectRepository) CreateBatch(ctx context.Context, subjects []SubjectCreateInput) ([]SubjectBatchResult, error) {
-	if r.createBatchFn == nil {
-		panic("unexpected call to deleteById")
-	}
-	return r.createBatchFn(ctx, subjects)
-}
-
-var _ SubjectContract = (*fakeSubjectRepository)(nil)
+var _ SubjectRepositoryContract = (*fakeSubjectRepository)(nil)
 
 func TestServiceCreate(t *testing.T) {
+	userID := uuid.New()
+
 	t.Run("returns error when color is invalid", func(t *testing.T) {
 		ctx := context.Background()
 		newFakeSubjectRepository := &fakeSubjectRepository{
-			getByNameFn: func(context.Context, string) (*Subject, error) {
+			getByNameFn: func(context.Context, uuid.UUID, string) (*Subject, error) {
 				return nil, ErrSubjectNotFound
 			},
 		}
@@ -77,7 +78,7 @@ func TestServiceCreate(t *testing.T) {
 			Color: "simsalabim",
 		}
 
-		err := service.Create(ctx, newSubject)
+		err := service.Create(ctx, userID, newSubject)
 		if !errors.Is(err, ErrSubjectInvalidColor) {
 			t.Fatalf("invalid subject color")
 		}
@@ -86,7 +87,7 @@ func TestServiceCreate(t *testing.T) {
 	t.Run("returns error when color is empty", func(t *testing.T) {
 		ctx := context.Background()
 		newFakeSubjectRepository := &fakeSubjectRepository{
-			getByNameFn: func(context.Context, string) (*Subject, error) {
+			getByNameFn: func(context.Context, uuid.UUID, string) (*Subject, error) {
 				return nil, ErrSubjectNotFound
 			},
 		}
@@ -97,7 +98,7 @@ func TestServiceCreate(t *testing.T) {
 			Color: " ",
 		}
 
-		err := service.Create(ctx, newSubject)
+		err := service.Create(ctx, userID, newSubject)
 		if !errors.Is(err, ErrSubjectRequiredColor) {
 			t.Fatalf(
 				"expected ErrSubjectColorRequired, got %v",
@@ -109,7 +110,7 @@ func TestServiceCreate(t *testing.T) {
 	t.Run("returns error when name is empty", func(t *testing.T) {
 		ctx := context.Background()
 		newFakeSubjectRepository := &fakeSubjectRepository{
-			getByNameFn: func(context.Context, string) (*Subject, error) {
+			getByNameFn: func(context.Context, uuid.UUID, string) (*Subject, error) {
 				return nil, ErrSubjectNotFound
 			},
 		}
@@ -120,7 +121,7 @@ func TestServiceCreate(t *testing.T) {
 			Color: "black",
 		}
 
-		err := service.Create(ctx, newSubject)
+		err := service.Create(ctx, userID, newSubject)
 		if !errors.Is(err, ErrSubjectRequiredName) {
 			t.Fatalf(
 				"expected ErrSubjectRequiredName, got %v",
@@ -132,22 +133,28 @@ func TestServiceCreate(t *testing.T) {
 
 func TestServiceGet(t *testing.T) {
 	ctx := context.Background()
+	userID := uuid.New()
 
 	expected := []Subject{
 		{
-			Name:  "Math",
-			Color: ColorBlack,
+			Id:     uuid.New(),
+			UserId: userID,
+			Name:   "Math",
+			Color:  ColorBlack,
 		},
 	}
 
 	repository := &fakeSubjectRepository{
-		getAllFn: func(ctx context.Context) ([]Subject, error) {
+		getAllFn: func(ctx context.Context, gotUserID uuid.UUID) ([]Subject, error) {
+			if gotUserID != userID {
+				t.Fatalf("expected userID %v, got %v", userID, gotUserID)
+			}
 			return expected, nil
 		},
 	}
 	service := NewSubjectService(repository)
 
-	sub, err := service.GetAll(ctx)
+	sub, err := service.GetAll(ctx, userID)
 
 	if err != nil {
 		t.Fatalf("Must return getAll error")

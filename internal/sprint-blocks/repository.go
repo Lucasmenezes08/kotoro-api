@@ -15,7 +15,7 @@ const (
 	uniqueViolationCode       = "23505"
 	activePositionUniqueIndex = "sprint_block_active_position_unique"
 	activeSubjectUniqueIndex  = "sprint_block_active_subject_unique"
-	sprintBlockColumns        = `id, sprint_id, subject_id, title, position, status, estimated_seconds, started_at, completed_at, created_at, updated_at, deleted_at`
+	sprintBlockColumns        = `id, sprint_id, subject_id, title, position, x, y, status, estimated_seconds, started_at, completed_at, created_at, updated_at, deleted_at`
 )
 
 type SprintBlockRepositoryContract interface {
@@ -25,6 +25,7 @@ type SprintBlockRepositoryContract interface {
 	Update(context.Context, uuid.UUID, uuid.UUID, SprintBlockUpdateModel) (*SprintBlock, error)
 	Delete(context.Context, uuid.UUID, uuid.UUID) error
 	Reorder(context.Context, uuid.UUID, []uuid.UUID) error
+	UpdateCanvasLayout(context.Context, uuid.UUID, []CanvasBlockLayoutItem) error
 	ExistsBySubjectID(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error)
 	ExistsByPosition(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error)
 }
@@ -36,8 +37,8 @@ func NewSprintBlockRepository(db *sqlx.DB) *SprintBlockRepository {
 }
 
 func (r *SprintBlockRepository) Create(ctx context.Context, input CreateSprintBlockModel) (*SprintBlock, error) {
-	query := `INSERT INTO sprint_block (sprint_id, subject_id, title, position, status, estimated_seconds)
-		VALUES (:sprint_id, :subject_id, :title, :position, :status, :estimated_seconds)
+	query := `INSERT INTO sprint_block (sprint_id, subject_id, title, position, x, y, status, estimated_seconds)
+		VALUES (:sprint_id, :subject_id, :title, :position, :x, :y, :status, :estimated_seconds)
 		RETURNING ` + sprintBlockColumns
 	rows, err := r.db.NamedQueryContext(ctx, query, input)
 	if err != nil {
@@ -91,9 +92,13 @@ func (r *SprintBlockRepository) Update(ctx context.Context, sprintID, blockID uu
 	query := `UPDATE sprint_block SET
 		subject_id = COALESCE($1::uuid, subject_id), title = COALESCE($2::varchar, title),
 		position = COALESCE($3::integer, position), estimated_seconds = COALESCE($4::integer, estimated_seconds),
+		x = COALESCE($5::double precision, x), y = COALESCE($6::double precision, y),
+		status = COALESCE($7::sprint_block_status, status),
+		started_at = COALESCE($8::timestamptz, started_at),
+		completed_at = COALESCE($9::timestamptz, completed_at),
 		updated_at = now()
-		WHERE sprint_id = $5 AND id = $6 AND deleted_at IS NULL`
-	result, err := tx.ExecContext(ctx, query, input.SubjectID, input.Title, input.Position, input.EstimatedSeconds, sprintID, blockID)
+		WHERE sprint_id = $10 AND id = $11 AND deleted_at IS NULL`
+	result, err := tx.ExecContext(ctx, query, input.SubjectID, input.Title, input.Position, input.EstimatedSeconds, input.X, input.Y, input.Status, input.StartedAt, input.CompletedAt, sprintID, blockID)
 	if err != nil {
 		return nil, translateConstraintError(err, "update sprint block")
 	}
@@ -166,6 +171,57 @@ func (r *SprintBlockRepository) Reorder(ctx context.Context, sprintID uuid.UUID,
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit reorder sprint blocks: %w", err)
+	}
+	return nil
+}
+
+func (r *SprintBlockRepository) UpdateCanvasLayout(ctx context.Context, sprintID uuid.UUID, items []CanvasBlockLayoutItem) error {
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update canvas layout: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	activeIDs, err := lockActiveBlockIDs(ctx, tx, sprintID)
+	if err != nil {
+		return err
+	}
+	itemIDs := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		itemIDs[i] = it.ID
+	}
+	if !sameUUIDSet(activeIDs, itemIDs) {
+		return ErrInvalidSprintBlockOrder
+	}
+
+	var maxPosition int
+	if err := tx.GetContext(ctx, &maxPosition, `SELECT COALESCE(MAX(position), 0) FROM sprint_block
+		WHERE sprint_id = $1 AND deleted_at IS NULL`, sprintID); err != nil {
+		return fmt.Errorf("get maximum sprint block position: %w", err)
+	}
+	offset := maxPosition + len(items) + 1
+	if _, err := tx.ExecContext(ctx, `UPDATE sprint_block SET position = position + $1
+		WHERE sprint_id = $2 AND deleted_at IS NULL`, offset, sprintID); err != nil {
+		return fmt.Errorf("move sprint blocks to temporary positions: %w", err)
+	}
+
+	for _, it := range items {
+		result, err := tx.ExecContext(ctx, `UPDATE sprint_block SET position = $1, x = $2, y = $3, updated_at = now()
+			WHERE sprint_id = $4 AND id = $5 AND deleted_at IS NULL`, it.Position, it.X, it.Y, sprintID, it.ID)
+		if err != nil {
+			return translateConstraintError(err, "update canvas layout block")
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("get canvas layout updated rows count: %w", err)
+		}
+		if rows != 1 {
+			return ErrInvalidSprintBlockOrder
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update canvas layout: %w", err)
 	}
 	return nil
 }

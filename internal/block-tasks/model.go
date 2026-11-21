@@ -63,15 +63,19 @@ type BlockTaskUpdateInput struct {
 	Position         *int
 	Priority         *TaskPriority
 	EstimatedSeconds *int
+	Status           *BlockTaskStatus
 }
 
 type BlockTaskUpdateModel struct {
-	Title            *string       `db:"title"`
-	Description      *string       `db:"description"`
-	DescriptionSet   bool          `db:"description_set"`
-	Position         *int          `db:"position"`
-	Priority         *TaskPriority `db:"priority"`
-	EstimatedSeconds *int          `db:"estimated_seconds"`
+	Title            *string          `db:"title"`
+	Description      *string          `db:"description"`
+	DescriptionSet   bool             `db:"description_set"`
+	Position         *int             `db:"position"`
+	Priority         *TaskPriority    `db:"priority"`
+	EstimatedSeconds *int             `db:"estimated_seconds"`
+	Status           *BlockTaskStatus `db:"status"`
+	CompletedAt      *time.Time       `db:"completed_at"`
+	CompletedAtSet   bool             `db:"completed_at_set"`
 }
 
 type BlockTaskResponse struct {
