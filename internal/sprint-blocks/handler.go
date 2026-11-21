@@ -52,6 +52,15 @@ type reorderSprintBlocksRequest struct {
 	BlockIDs []string `json:"block_ids"`
 }
 
+type reuseBlocksRequest struct {
+	SourceSprintID string   `json:"source_sprint_id"`
+	BlockIDs       []string `json:"block_ids"`
+}
+
+type applyFixedCyclesRequest struct {
+	FixedCycleIDs []string `json:"fixed_cycle_ids"`
+}
+
 type sprintBlockErrorResponse struct {
 	Error string `json:"error"`
 }
@@ -268,6 +277,69 @@ func (h *SprintBlockHandler) UpdateCanvasLayout(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *SprintBlockHandler) ReuseBlocks(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	targetSprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req reuseBlocksRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	sourceSprintID, err := uuid.Parse(req.SourceSprintID)
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid source sprint id"})
+		return
+	}
+	var blockUUIDs []uuid.UUID
+	for _, idStr := range req.BlockIDs {
+		u, err := uuid.Parse(idStr)
+		if err == nil {
+			blockUUIDs = append(blockUUIDs, u)
+		}
+	}
+	blocks, err := h.service.ReuseBlocks(r.Context(), userID, targetSprintID, sourceSprintID, blockUUIDs)
+	if err != nil {
+		h.writeError(w, err, "reuse sprint blocks")
+		return
+	}
+	utils.WriteJson(w, http.StatusCreated, blocks)
+}
+
+func (h *SprintBlockHandler) ApplyFixedCycles(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	targetSprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req applyFixedCyclesRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	var cycleUUIDs []uuid.UUID
+	for _, idStr := range req.FixedCycleIDs {
+		u, err := uuid.Parse(idStr)
+		if err == nil {
+			cycleUUIDs = append(cycleUUIDs, u)
+		}
+	}
+	blocks, err := h.service.ApplyFixedCycles(r.Context(), userID, targetSprintID, cycleUUIDs)
+	if err != nil {
+		h.writeError(w, err, "apply fixed cycles")
+		return
+	}
+	utils.WriteJson(w, http.StatusCreated, blocks)
+}
+
 func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operation string) {
 	switch {
 	case errors.Is(err, ErrSprintBlockUpdateEmpty),
@@ -283,6 +355,8 @@ func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operat
 		errors.Is(err, subject.ErrSubjectNotFound),
 		errors.Is(err, ErrSprintBlockNotFound):
 		utils.WriteJson(w, http.StatusNotFound, sprintBlockErrorResponse{Error: err.Error()})
+	case errors.Is(err, ErrFixedCyclesAlreadyApplied):
+		utils.WriteJson(w, http.StatusConflict, sprintBlockErrorResponse{Error: "Ciclos fixos já foram aplicados a esta sprint"})
 	case errors.Is(err, ErrSprintNotInPlanning),
 		errors.Is(err, ErrSprintBlockNotEditable),
 		errors.Is(err, ErrSprintBlockPositionConflict),

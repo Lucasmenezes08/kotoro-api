@@ -223,7 +223,8 @@ func (s *SubjectService) workerCreateSubjects(ctx context.Context, userID uuid.U
 
 func ValidColor(color Color) error {
 	switch color {
-	case ColorBlack, ColorBlue, ColorGray, ColorGreen, ColorOrange, ColorPink, ColorPurple, ColorRed, ColorWhite, ColorYellow:
+	case ColorBlack, ColorBlue, ColorGray, ColorGreen, ColorOrange, ColorPink, ColorPurple, ColorRed, ColorWhite, ColorYellow,
+		ColorTeal, ColorCyan, ColorIndigo, ColorEmerald, ColorAmber, ColorRose, ColorLime, ColorViolet, ColorFuchsia, ColorBrown:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrSubjectInvalidColor, color)

@@ -259,6 +259,8 @@ func (s *StudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.UUID,
 			return err
 		}
 
+		completedTaskIDs := make([]uuid.UUID, 0)
+
 		if input.Reason == CycleStopReasonCompleted {
 			switch existing.ExecutionMode {
 			case ExecutionModeSingleTask, ExecutionModeMultipleTasks:
@@ -266,6 +268,7 @@ func (s *StudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.UUID,
 				if err != nil {
 					return fmt.Errorf("get study cycle task ids: %w", err)
 				}
+				completedTaskIDs = taskIDs
 				if len(taskIDs) > 0 {
 					if err := tx.CompleteCycleTasks(ctx, cycleID, now); err != nil {
 						return fmt.Errorf("complete study cycle tasks: %w", err)
@@ -294,6 +297,27 @@ func (s *StudyCycleService) Stop(ctx context.Context, userID, cycleID uuid.UUID,
 						return fmt.Errorf("finish sprint block: %w", err)
 					}
 				}
+			}
+		}
+
+		if updated.Status == StudyCycleFinished {
+			block, err := tx.GetBlockByID(ctx, updated.SprintBlockID)
+			if err != nil {
+				return fmt.Errorf("get sprint block for finished event: %w", err)
+			}
+
+			event, err := NewStudyCycleFinishedEvent(
+				userID,
+				*updated,
+				block.SubjectID,
+				completedTaskIDs,
+				now,
+			)
+			if err != nil {
+				return fmt.Errorf("create study cycle finished event: %w", err)
+			}
+			if err := tx.EnqueueOutboxEvent(ctx, event); err != nil {
+				return fmt.Errorf("enqueue study cycle finished event: %w", err)
 			}
 		}
 

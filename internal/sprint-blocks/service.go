@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
@@ -28,6 +29,7 @@ var (
 	ErrInvalidSprintBlockOrder            = errors.New("invalid sprint block order")
 	ErrSprintBlockStatusInvalid           = errors.New("sprint block status is invalid")
 	ErrSprintBlockTimeRangeInvalid        = errors.New("started_at must be before completed_at")
+	ErrFixedCyclesAlreadyApplied          = errors.New("fixed cycles have already been applied to this sprint")
 )
 
 type sprintReader interface {
@@ -46,6 +48,8 @@ type SprintBlockServiceContract interface {
 	Delete(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	Reorder(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
 	UpdateCanvasLayout(context.Context, uuid.UUID, uuid.UUID, UpdateCanvasLayoutInput) error
+	ReuseBlocks(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) ([]SprintBlock, error)
+	ApplyFixedCycles(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]SprintBlock, error)
 }
 
 type SprintBlockService struct {
@@ -277,6 +281,58 @@ func (s *SprintBlockService) UpdateCanvasLayout(ctx context.Context, userID, spr
 		seenPositions[it.Position] = struct{}{}
 	}
 	return s.repository.UpdateCanvasLayout(ctx, sprintID, input.Blocks)
+}
+
+func (s *SprintBlockService) ReuseBlocks(
+	ctx context.Context,
+	userID, targetSprintID, sourceSprintID uuid.UUID,
+	blockIDs []uuid.UUID,
+) ([]SprintBlock, error) {
+	if _, err := s.requireEditableSprint(ctx, userID, targetSprintID); err != nil {
+		return nil, err
+	}
+	src, err := s.sprintReader.GetById(ctx, sourceSprintID)
+	if err != nil {
+		return nil, err
+	}
+	if src.UserID != userID {
+		return nil, sprint.ErrSprintNotFound
+	}
+	return s.repository.ReuseBlocks(ctx, targetSprintID, sourceSprintID, blockIDs)
+}
+
+func (s *SprintBlockService) ApplyFixedCycles(
+	ctx context.Context,
+	userID, targetSprintID uuid.UUID,
+	fixedCycleIDs []uuid.UUID,
+) ([]SprintBlock, error) {
+	sp, err := s.requireEditableSprint(ctx, userID, targetSprintID)
+	if err != nil {
+		return nil, err
+	}
+	if sp.FixedCyclesApplied {
+		return nil, ErrFixedCyclesAlreadyApplied
+	}
+
+	var dayOfWeek string
+	switch sp.SprintDate.Weekday() {
+	case time.Sunday:
+		dayOfWeek = "domingo"
+	case time.Monday:
+		dayOfWeek = "segunda"
+	case time.Tuesday:
+		dayOfWeek = "terca"
+	case time.Wednesday:
+		dayOfWeek = "quarta"
+	case time.Thursday:
+		dayOfWeek = "quinta"
+	case time.Friday:
+		dayOfWeek = "sexta"
+	case time.Saturday:
+		dayOfWeek = "sabado"
+	}
+
+	return s.repository.ApplyFixedCycles(ctx, targetSprintID, userID, fixedCycleIDs, dayOfWeek)
 }
 
 func (s *SprintBlockService) requireEditableSprint(ctx context.Context, userID, sprintID uuid.UUID) (*sprint.Sprint, error) {

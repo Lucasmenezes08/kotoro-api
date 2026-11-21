@@ -20,7 +20,9 @@ type fakeBlockRepository struct {
 	reorderFn            func(context.Context, uuid.UUID, []uuid.UUID) error
 	updateCanvasLayoutFn func(context.Context, uuid.UUID, []CanvasBlockLayoutItem) error
 	existsSubjectFn      func(context.Context, uuid.UUID, uuid.UUID, *uuid.UUID) (bool, error)
-	existsPositionFn func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error)
+	existsPositionFn     func(context.Context, uuid.UUID, int, *uuid.UUID) (bool, error)
+	reuseBlocksFn        func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) ([]SprintBlock, error)
+	applyFixedCyclesFn   func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID, string) ([]SprintBlock, error)
 }
 
 func (f *fakeBlockRepository) Create(ctx context.Context, input CreateSprintBlockModel) (*SprintBlock, error) {
@@ -64,6 +66,18 @@ func (f *fakeBlockRepository) UpdateCanvasLayout(ctx context.Context, sprintID u
 		return f.updateCanvasLayoutFn(ctx, sprintID, items)
 	}
 	return nil
+}
+func (f *fakeBlockRepository) ReuseBlocks(ctx context.Context, targetSprintID, sourceSprintID uuid.UUID, blockIDs []uuid.UUID) ([]SprintBlock, error) {
+	if f.reuseBlocksFn != nil {
+		return f.reuseBlocksFn(ctx, targetSprintID, sourceSprintID, blockIDs)
+	}
+	return nil, nil
+}
+func (f *fakeBlockRepository) ApplyFixedCycles(ctx context.Context, targetSprintID, userID uuid.UUID, fixedCycleIDs []uuid.UUID, dayOfWeek string) ([]SprintBlock, error) {
+	if f.applyFixedCyclesFn != nil {
+		return f.applyFixedCyclesFn(ctx, targetSprintID, userID, fixedCycleIDs, dayOfWeek)
+	}
+	return nil, nil
 }
 func (f *fakeBlockRepository) ExistsBySubjectID(ctx context.Context, sprintID, subjectID uuid.UUID, exclude *uuid.UUID) (bool, error) {
 	if f.existsSubjectFn == nil {
@@ -522,6 +536,53 @@ func TestSprintBlockServiceDeleteAndReorder(t *testing.T) {
 		})
 		if err != nil || !called {
 			t.Fatalf("expected successful canvas coordinate update preserving position, got %v", err)
+		}
+	})
+
+	t.Run("reuse blocks from another sprint", func(t *testing.T) {
+		targetSprintID := uuid.New()
+		sourceSprintID := uuid.New()
+		sprintMap := map[uuid.UUID]*sprint.Sprint{
+			targetSprintID: {ID: targetSprintID, UserID: defaultTestUserID, Status: sprint.Creating, SprintDate: time.Now()},
+			sourceSprintID: {ID: sourceSprintID, UserID: defaultTestUserID, Status: sprint.Finished, SprintDate: time.Now().Add(-24 * time.Hour)},
+		}
+		sprintReader := fakeSprintReader{fn: func(ctx context.Context, id uuid.UUID) (*sprint.Sprint, error) {
+			s, ok := sprintMap[id]
+			if !ok {
+				return nil, sprint.ErrSprintNotFound
+			}
+			return s, nil
+		}}
+		called := false
+		repo := &fakeBlockRepository{
+			reuseBlocksFn: func(ctx context.Context, target, source uuid.UUID, blockIDs []uuid.UUID) ([]SprintBlock, error) {
+				called = true
+				return []SprintBlock{{ID: uuid.New(), SprintID: target, Position: 1}}, nil
+			},
+		}
+		service := NewSprintBlockService(repo, sprintReader, fakeSubjectReader{})
+		blocks, err := service.ReuseBlocks(context.Background(), defaultTestUserID, targetSprintID, sourceSprintID, nil)
+		if err != nil || !called || len(blocks) != 1 {
+			t.Fatalf("expected ReuseBlocks success, got err: %v, called: %v, count: %d", err, called, len(blocks))
+		}
+	})
+
+	t.Run("apply fixed cycles to active sprint", func(t *testing.T) {
+		targetSprintID := uuid.New()
+		sprintReader := fakeSprintReader{fn: func(ctx context.Context, id uuid.UUID) (*sprint.Sprint, error) {
+			return &sprint.Sprint{ID: targetSprintID, UserID: defaultTestUserID, Status: sprint.Creating, SprintDate: time.Now()}, nil
+		}}
+		called := false
+		repo := &fakeBlockRepository{
+			applyFixedCyclesFn: func(ctx context.Context, target, user uuid.UUID, ids []uuid.UUID, day string) ([]SprintBlock, error) {
+				called = true
+				return []SprintBlock{{ID: uuid.New(), SprintID: target, Position: 1}}, nil
+			},
+		}
+		service := NewSprintBlockService(repo, sprintReader, fakeSubjectReader{})
+		blocks, err := service.ApplyFixedCycles(context.Background(), defaultTestUserID, targetSprintID, nil)
+		if err != nil || !called || len(blocks) != 1 {
+			t.Fatalf("expected ApplyFixedCycles success, got err: %v, called: %v, count: %d", err, called, len(blocks))
 		}
 	})
 }

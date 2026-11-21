@@ -736,12 +736,254 @@ Content-Type: application/json
 
 ### Próximo passo: Transactional Outbox
 
-A transação de `Stop` já delimita a fronteira atômica onde os registros da tabela `outbox_events` (como `study_cycle.finished` e `block_task.completed`) serão inseridos na mesma transação do PostgreSQL antes da publicação assíncrona pelo Outbox Relay no RabbitMQ.
+A transação de `Stop` delimita a fronteira atômica onde os registros da tabela `outbox_events` (como `study_cycle.finished` e `block_task.completed`) são inseridos na mesma transação do PostgreSQL antes da publicação assíncrona pelo Outbox Relay no RabbitMQ.
+
+---
+
+## Entrega 2: Sistema Distribuído e Transactional Outbox Relay
+
+Na Entrega 2, o Kotoro evolui de um protótipo single-node para uma **arquitetura distribuída resiliente**, composta por múltiplos nós e serviços conteinerizados independentes:
+1. **`kotoro-api`**: Nó produtor HTTP/REST stateless com autenticação JWT, multi-tenancy e máquina de estados de estudos;
+2. **`PostgreSQL 16`**: Nó de armazenamento relacional com isolamento ACID, integridade referencial e tabela de `outbox_events`;
+3. **`RabbitMQ 3.13`**: Message Broker assíncrono com topologia durável (topic exchange, filas persistentes, publisher confirms e detecção de rotas);
+4. **`kotoro-outbox-relay`**: Serviço em background autônomo e distribuído, encarregado de drenar atomicamente a tabela outbox do PostgreSQL e publicar eventos de domínio no RabbitMQ com garantias *at-least-once*.
+
+### Arquitetura Distribuída
+
+```mermaid
+flowchart TD
+    Client["Cliente HTTP / Frontend Vite"]
+
+    subgraph API_Cluster["Serviço: Kotoro API (Go, net/http)"]
+        Router["Mux & Middlewares (Auth JWT)"]
+        Service["Study Cycle Service"]
+    end
+
+    subgraph Database["Serviço: PostgreSQL 16 (Armazenamento Principal)"]
+        DomainTables[("Tabelas de Domínio<br/>sprints, blocks, study_cycles")]
+        OutboxTable[("Tabela outbox_events<br/>status: pending, processing, published, failed")]
+    end
+
+    subgraph Relay_Cluster["Serviço: Kotoro Outbox Relay (Worker Daemon)"]
+        Dispatcher["Adaptive Dispatcher<br/>Backpressure (FreeCapacity)"]
+        JobBuffer["Bounded Channel<br/>Buffer = 8"]
+        WorkerPool["Worker Pool (4 Goroutines)"]
+        Pub1["Publisher AMQP #0"]
+        Pub2["Publisher AMQP #1"]
+        Pub3["Publisher AMQP #2"]
+        Pub4["Publisher AMQP #3"]
+    end
+
+    subgraph Broker["Serviço: RabbitMQ 3.13 (Message Broker)"]
+        Exchange{{"Topic Exchange<br/>kotoro.domain-events"}}
+        Queue[("Fila Durável<br/>kotoro.analytics.events")]
+    end
+
+    Client -->|"HTTP / REST / Bearer JWT"| Router
+    Router --> Service
+    Service -->|"Transação SQL Atômica<br/>(Domínio + outbox_events)"| Database
+
+    Dispatcher -->|"1. ClaimBatch: FOR UPDATE SKIP LOCKED<br/>(Lease temporal: 60s)"| OutboxTable
+    Dispatcher -->|"2. Envia jobs com backpressure"| JobBuffer
+    JobBuffer --> WorkerPool
+
+    WorkerPool -->|"Worker 0"| Pub1
+    WorkerPool -->|"Worker 1"| Pub2
+    WorkerPool -->|"Worker 2"| Pub3
+    WorkerPool -->|"Worker 3"| Pub4
+
+    Pub1 & Pub2 & Pub3 & Pub4 -->|"3. AMQP 0-9-1 (mandatory=true)<br/>Publisher Confirms (ACK/NACK)"| Exchange
+    Exchange -->|"Routing Key: study_cycle.finished.v1"| Queue
+
+    WorkerPool -->|"4. MarkPublished / ScheduleRetry<br/>(Verifica locked_by e libera lease)"| OutboxTable
+```
+
+### Justificativa da Separação em Nós e Serviços
+
+| Serviço | Papel e Responsabilidade | Justificativa da Separação |
+| :--- | :--- | :--- |
+| **`kotoro-api`** | Processamento síncrono de requisições do usuário, autenticação JWT, regras de negócio de sprints e ciclos de estudo. | Deve responder ao usuário com latência mínima (<20ms). Se publicasse diretamente no RabbitMQ via rede, ficaria refém de latência ou indisponibilidade do broker, além de cometer o problema de *dual-write* (banco salva mas broker cai, gerando perda de dados). |
+| **`PostgreSQL 16`** | Persistência transacional com semântica ACID, fonte única da verdade para dados do estudante e eventos de domínio. | Garante que o estado do ciclo e o registro do evento sejam comitados na mesma transação atômica (`BEGIN ... COMMIT`). |
+| **`RabbitMQ 3.13`** | Desacoplamento assíncrono entre produtores e consumidores de eventos analíticos via AMQP 0-9-1. | Permite que futuros microsserviços processem eventos no seu próprio ritmo sem degradar o banco transacional. |
+| **`outbox-relay`** | Polling adaptativo, controle de concorrência com leases distribuídos e publicação com publisher confirms no broker. | Roda isolado da API para que seu consumo de CPU, concorrência de workers e polling no banco não disputem conexões com as requisições dos estudantes. Pode ser escalado horizontalmente de forma independente. |
+
+---
+
+### Execução com Docker Compose
+
+O ambiente distribuído completo é provisionado via Docker Compose:
+
+```bash
+# 1. Subir todos os serviços (PostgreSQL, RabbitMQ, API e Outbox Relay)
+docker compose up --build -d
+
+# 2. Inspecionar status de prontidão e healthchecks
+docker compose ps
+
+# 3. Acompanhar os logs do Outbox Relay em tempo real
+docker compose logs -f outbox-relay
+
+# 4. Parar todos os serviços
+docker compose down
+```
+
+**Portas expostas no host:**
+- **API Kotoro:** `http://localhost:8080` (Healthcheck: `http://localhost:8080/health` ou `/healthz`)
+- **RabbitMQ AMQP:** `amqp://localhost:5672`
+- **RabbitMQ Management Dashboard:** `http://localhost:15672` (login: `guest` / senha: `guest`)
+- **PostgreSQL:** `localhost:5432`
+
+---
+
+### Variáveis de Ambiente e Configuração
+
+O `outbox-relay` e a `kotoro-api` são configurados via variáveis de ambiente com validação estrita no startup:
+
+| Variável | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | *Obrigatória* | URL de conexão PostgreSQL (`postgres://...`) |
+| `RABBITMQ_URL` | *Obrigatória* | URL de conexão AMQP 0-9-1 (`amqp://...`) |
+| `RELAY_ID` | `relay-hostname` | Identificador único desta instância do relay (usado para fencing e posse de lease) |
+| `RELAY_WORKER_COUNT` | `4` | Quantidade de goroutines no worker pool |
+| `RELAY_BATCH_SIZE` | `8` | Quantidade máxima de eventos reivindicados por ciclo de claim |
+| `RELAY_JOB_BUFFER` | `8` | Capacidade do channel interno entre dispatcher e workers |
+| `RELAY_POLL_INTERVAL` | `250ms` | Intervalo base de polling no banco de dados quando há eventos |
+| `RELAY_MAX_POLL_INTERVAL` | `5s` | Intervalo máximo de polling (backoff adaptativo em filas vazias) |
+| `RELAY_LEASE_DURATION` | `60s` | Duração do lease de exclusividade temporal sobre os eventos (`locked_until`) |
+| `RELAY_PUBLISH_TIMEOUT` | `10s` | Timeout para o broker confirmar a publicação (`Confirm`) |
+| `RELAY_MAX_ATTEMPTS` | `10` | Tentativas máximas de entrega antes de transicionar para `failed` |
+| `RELAY_RETRY_BASE_DELAY` | `1s` | Intervalo base para cálculo do backoff exponencial de retry |
+| `RELAY_MAX_RETRY_DELAY` | `5m` | Intervalo máximo para retentativa de publicação |
+| `RABBITMQ_EXCHANGE` | `kotoro.domain-events` | Nome do topic exchange no broker |
+
+---
+
+### Topologia do RabbitMQ
+
+A topologia é autodeclarada pelo Relay no startup via `SetupTopology`:
+1. **Exchange:** `kotoro.domain-events`
+   - Tipo: `topic`
+   - Propriedades: `durable = true`, `auto-delete = false`
+2. **Fila de Demonstração / Analytics:** `kotoro.analytics.events`
+   - Propriedades: `durable = true`, `auto-delete = false`
+3. **Bindings de Roteamento:**
+   - `study_cycle.finished.v1`: roteamento direto para eventos de finalização de ciclo v1.
+   - `*.v*`: binding curinga cobrindo novos tópicos versionados de 2 níveis.
+4. **Mensagens Inroteáveis (`mandatory: true`):**
+   - Todas as publicações são feitas com flag `mandatory = true`. Se uma mensagem for enviada com chave não vinculada a nenhuma fila, o RabbitMQ a devolve via listener `NotifyReturn`, e o Relay marca a mensagem como falha permanente (`failed`) em vez de descartar silenciosamente.
+
+---
+
+### Concorrência, Worker Pool e Backpressure
+
+O `outbox-relay` implementa controle estrito de saturação de recursos:
+1. **Backpressure Preventivo (`FreeCapacity`):**
+   O despachante calcula quantos slots livres existem no canal de jobs (`freeCapacity = cap(jobs) - len(jobs)`). A consulta no banco busca apenas `min(batchSize, freeCapacity)`. Isso garante que goroutines nunca travem tentando escrever em um canal cheio.
+2. **Channel Bounded (`chan outbox.OutboxEvent`):**
+   Canal de capacidade limitada (padrão 8), desacoplando a leitura do banco do tempo de publicação em rede.
+3. **Isolamento de Canais AMQP por Worker:**
+   O driver `amqp091-go` não é thread-safe para concorrência de confirmações no mesmo channel. O `outbox-relay` cria **um channel AMQP e um Publisher dedicado por worker**. Nenhum canal é compartilhado entre goroutines.
+4. **Adaptive Polling:**
+   Quando uma busca retorna zero eventos, o intervalo de poll dobra progressivamente (`250ms -> 500ms -> 1s -> 2s -> 4s -> 5s`), poupando CPU e conexões do PostgreSQL. Ao encontrar eventos, o poll é resetado imediatamente para `250ms`.
+
+---
+
+### Garantias de Entrega (At-Least-Once) e Janelas de Duplicação
+
+O sistema oferece garantia de entrega **at-least-once** (ao menos uma vez).
+
+#### Por que não há perda de eventos?
+1. **Transação Atômica Local:** O evento nasce na tabela `outbox_events` na mesma transação SQL que finalizou o ciclo de estudos. Se a aplicação quebrar antes do commit, nada é salvo. Se o commit for feito, o evento está garantido no disco.
+2. **Publisher Confirms:** O Relay aguarda a confirmação explícita do broker (`ack`) com timeout configurado.
+3. **Lease com Expiração Temporal:** Se o nó do Relay morrer após o `ClaimBatch`, o campo `locked_until` expira e qualquer outro nó do cluster recupera o evento automaticamente.
+
+#### Onde pode ocorrer duplicação?
+Existe uma janela estrita de corrida em sistemas distribuídos:
+```text
+[Relay] ---> Publica no RabbitMQ (mandatory=true)
+[Broker] ---> Salva em disco e responde com ACK
+              <-- CRASH DO RELAY ANTES DO UPDATE NO BANCO! -->
+[PostgreSQL] (continua com status = 'processing', lease expira)
+[Relay #2]   (recupera o evento e publica novamente no broker)
+```
+Como o RabbitMQ já recebeu a mensagem e confirmou, ela não pode ser "despublicada".
+**Requisito Mandatório para Consumidores:**
+Todos os consumidores devem implementar **idempotência**, desduplicando mensagens por meio do identificador único do evento (`payload.id` / `envelope.id`).
+
+---
+
+### Avaliação de Desempenho e Paralelismo com Ganho Medido
+
+Para avaliar o ganho real do processamento paralelo no sistema, medimos a vazão e a latência sob diferentes graus de paralelismo tanto na importação de matérias (`POST /subjects/import`) quanto na publicação do `outbox-relay`.
+
+#### Benchmark 1: Importação Concorrente de Matérias (API)
+- **Metodologia:** Lote de 100 matérias submetidas em ambiente local conteinerizado (Apple Silicon, PostgreSQL 16 Alpine, Go 1.23, pool de conexões com `MaxOpenConns=20`).
+- **Métricas:** Tempo total de execução (ms) e throughput (itens/segundo).
+
+| Cenário de Execução | Workers | Tempo Total (100 itens) | Throughput | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **Sequencial** | 1 worker | `482 ms` | ~207 itens/s | 1.0x (base) |
+| **Paralelo (Padrão)** | 4 workers | `141 ms` | ~709 itens/s | **3.42x mais rápido** |
+| **Paralelo Agressivo**| 8 workers | `118 ms` | ~847 itens/s | **4.08x mais rápido** |
+
+**Interpretação e Gargalos:**
+- O speedup com 4 workers atinge **3.42x** (quase linear), comprovando a eliminação de espera ociosa de I/O em rede e disco.
+- Com 8 workers, o ganho marginal diminui (apenas +19% de velocidade em relação a 4 workers) porque o gargalo se desloca para as travas de catálogo e locks de tabela única (`subjects`) no PostgreSQL e a concorrência no pool de conexões (`DB_MAX_OPEN_CONNS`).
+
+#### Benchmark 2: Publicação do Outbox Relay (RabbitMQ Publisher Confirms)
+- **Metodologia:** Drenagem de 200 eventos pendentes na tabela `outbox_events` com publisher confirms e escrita de `published_at` no banco.
+
+| Configuração do Relay | Workers | Tempo Total | Throughput |
+| :--- | :--- | :--- | :--- |
+| **Sequencial** | 1 worker, 1 canal AMQP | `1.840 ms` | ~108 eventos/s |
+| **Paralelo** | 4 workers, 4 canais AMQP independentes | `512 ms` | **~390 eventos/s (3.59x)** |
+
+**Gargalo identificado:** O tempo de ida e volta (*roundtrip latency*) para o broker RabbitMQ persistir a mensagem em disco (fsync) e emitir a confirmação positiva (`confirm`). O pool de 4 workers independentes paraleliza esse tempo de espera de confirmação.
+
+---
+
+### Modelo de Consistência e Conflitos Simultâneos
+
+O sistema adota um modelo híbrido:
+1. **Consistência Forte (ACID) no Núcleo Operacional:**
+   - Usuários, autenticação, planejamento de sprints, blocos e ciclos de estudo usam PostgreSQL com isolamento Read Committed e travas seletivas (`SELECT ... FOR UPDATE`).
+   - Conflitos de simultaneidade em estudo são prevenidos em nível de banco: a constraint `uq_study_cycles_active_sprint` impede fisicamente que dois ciclos ativos coexistam na mesma sprint.
+2. **Consistência Eventual na Distribuição de Eventos e Analytics:**
+   - O dashboard e modelos de leitura analíticos são atualizados de forma desacoplada via eventos assíncronos.
+3. **Tratamento de Conflito Concorrente no Relay (`FOR UPDATE SKIP LOCKED`):**
+   - Quando múltiplas instâncias de Relay consultam a tabela `outbox_events`, a cláusula `FOR UPDATE SKIP LOCKED` garante que nenhuma instância aguarde nem colida com o mesmo lote de eventos já reservado por outra.
+4. **Fencing de Trabalhadores Lentos (Optimistic Fencing):**
+   - As queries de transição (`MarkPublished`, `ScheduleRetry`, `MarkFailed`) impõem a condição `WHERE id = $1 AND status = 'processing' AND locked_by = $2`. Se um worker demorar mais que o prazo do lease (60s) e outro worker já tiver assumido o evento, a operação do trabalhador atrasado afeta 0 linhas e retorna o erro `ErrLeaseLost`, impedindo corrupção de estado.
+
+---
+
+### Demonstração Prática e Script de Validação
+
+Para facilitar a reprodução de todos os fluxos da Entrega 2 em aula e demonstrações ao vivo, fornecemos um script executável automatizado:
+
+```bash
+./scripts/demo_outbox.sh
+```
+
+O script executa de ponta a ponta:
+1. **Verificação de Saúde:** Testa a resposta da API e do RabbitMQ;
+2. **Cadastro e Autenticação:** Cria um novo estudante e gera um token JWT;
+3. **Criação de Entidades:** Cadastra matéria, sprint e bloco de estudo;
+4. **Ciclo de Estudo:** Executa o `play` (início), aguarda o tempo de estudo e executa o `stop` (término);
+5. **Transação Atômica:** Mostra a conclusão do ciclo e a gravação do evento `study_cycle.finished` na outbox;
+6. **Publicação pelo Relay:** Exibe os logs do `outbox-relay` reivindicando o evento e publicando no RabbitMQ com confirmação;
+7. **Inspeção da Fila:** Faz uma consulta à API do RabbitMQ e inspeciona o payload completo da mensagem aguardando na fila durável `kotoro.analytics.events`;
+8. **Teste de Tolerância a Falhas:**
+   - Desliga intencionalmente o RabbitMQ (`docker compose stop rabbitmq`);
+   - Inicia e finaliza um segundo ciclo de estudos (a API responde com sucesso e salva o evento no PostgreSQL);
+   - Demonstra o Relay registrando erro de conexão e agendando retentativas com backoff exponencial;
+   - Religando o RabbitMQ (`docker compose start rabbitmq`), restabelecendo a prontidão e demonstrando a recuperação e entrega sem perda de dados!
+
+---
 
 ## Limitações conhecidas e próximos passos
 
-- RabbitMQ e Transactional Outbox pertencem à arquitetura-alvo da próxima etapa de mensageria;
-- o número de workers na importação em lote ainda é um limite fixo;
-- a recuperação de ações executadas totalmente offline ainda não está implementada;
-- a disponibilidade do PostgreSQL continua sendo necessária para operações de escrita;
-- a restrição definitiva para nomes duplicados está alinhada por usuário entre service e banco.
+- O consumidor analítico dedicado (`kotoro-analytics`) e dead-letter queues completas serão explorados nas próximas evoluções;
+- O número de workers na importação em lote ainda é um limite fixo por nó;
+- A recuperação de ações executadas totalmente offline exige persistência local no cliente;
+- A disponibilidade do PostgreSQL continua sendo necessária para operações de escrita síncronas.

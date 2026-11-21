@@ -21,6 +21,8 @@ func TestRoutes_AuthProtection(t *testing.T) {
 	RegisterSprintBlockRoutes(mux, nil, authMiddleware)
 	RegisterBlockTaskRoutes(mux, nil, authMiddleware)
 	RegisterStudyCycleRoutes(mux, nil, authMiddleware)
+	RegisterHabitsRoutes(mux, nil, authMiddleware)
+	RegisterAnalyticsRoutes(mux, nil, authMiddleware)
 
 	t.Run("public endpoints do not require authorization", func(t *testing.T) {
 		publicPaths := []struct {
@@ -62,6 +64,11 @@ func TestRoutes_AuthProtection(t *testing.T) {
 			{http.MethodPost, "/study-cycles/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/pause"},
 			{http.MethodPost, "/study-cycles/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/resume"},
 			{http.MethodPost, "/study-cycles/c379a04a-8745-42d4-a7fc-2e6b7fc5ef02/stop"},
+			{http.MethodGet, "/habits/water"},
+			{http.MethodPost, "/habits/water"},
+			{http.MethodPut, "/habits/water/target"},
+			{http.MethodGet, "/analytics/subjects"},
+			{http.MethodGet, "/analytics/streak"},
 		}
 
 		for _, p := range protectedPaths {
