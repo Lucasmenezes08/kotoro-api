@@ -27,5 +27,15 @@ services:
       timeout: 5s
       retries: 5
 
+  analytics-api:
+    build:
+      context: ./analytics
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
+      ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
+
 volumes:
   postgres_data:
