@@ -79,6 +79,8 @@ services:
     environment:
       ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
       ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
+    networks:
+      - kotoro-net
 
 volumes:
   postgres_data:
