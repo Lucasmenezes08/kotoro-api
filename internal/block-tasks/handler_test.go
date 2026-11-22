@@ -7,60 +7,63 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	sprintblocks "github.com/Lucasmenezes08/kotoro-api.git/internal/sprint-blocks"
 	"github.com/google/uuid"
 )
 
 type fakeTaskService struct {
-	createFn  func(context.Context, uuid.UUID, uuid.UUID, CreateBlockTaskInput) (*BlockTask, error)
-	getAllFn  func(context.Context, uuid.UUID, uuid.UUID) ([]BlockTask, error)
-	getByIDFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*BlockTask, error)
-	updateFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error)
-	deleteFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
-	reorderFn func(context.Context, uuid.UUID, uuid.UUID, []uuid.UUID) error
+	createFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, CreateBlockTaskInput) (*BlockTask, error)
+	getAllFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]BlockTask, error)
+	getByIDFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) (*BlockTask, error)
+	updateFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error)
+	deleteFn  func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) error
+	reorderFn func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID) error
 }
 
-func (f *fakeTaskService) Create(ctx context.Context, sprintID, blockID uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
+func (f *fakeTaskService) Create(ctx context.Context, userID, sprintID, blockID uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
 	if f.createFn == nil {
 		panic("unexpected Create")
 	}
-	return f.createFn(ctx, sprintID, blockID, input)
+	return f.createFn(ctx, userID, sprintID, blockID, input)
 }
-func (f *fakeTaskService) GetAll(ctx context.Context, sprintID, blockID uuid.UUID) ([]BlockTask, error) {
+func (f *fakeTaskService) GetAll(ctx context.Context, userID, sprintID, blockID uuid.UUID) ([]BlockTask, error) {
 	if f.getAllFn == nil {
 		panic("unexpected GetAll")
 	}
-	return f.getAllFn(ctx, sprintID, blockID)
+	return f.getAllFn(ctx, userID, sprintID, blockID)
 }
-func (f *fakeTaskService) GetByID(ctx context.Context, sprintID, blockID, taskID uuid.UUID) (*BlockTask, error) {
+func (f *fakeTaskService) GetByID(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID) (*BlockTask, error) {
 	if f.getByIDFn == nil {
 		panic("unexpected GetByID")
 	}
-	return f.getByIDFn(ctx, sprintID, blockID, taskID)
+	return f.getByIDFn(ctx, userID, sprintID, blockID, taskID)
 }
-func (f *fakeTaskService) Update(ctx context.Context, sprintID, blockID, taskID uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
+func (f *fakeTaskService) Update(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
 	if f.updateFn == nil {
 		panic("unexpected Update")
 	}
-	return f.updateFn(ctx, sprintID, blockID, taskID, input)
+	return f.updateFn(ctx, userID, sprintID, blockID, taskID, input)
 }
-func (f *fakeTaskService) Delete(ctx context.Context, sprintID, blockID, taskID uuid.UUID) error {
+func (f *fakeTaskService) Delete(ctx context.Context, userID, sprintID, blockID, taskID uuid.UUID) error {
 	if f.deleteFn == nil {
 		panic("unexpected Delete")
 	}
-	return f.deleteFn(ctx, sprintID, blockID, taskID)
+	return f.deleteFn(ctx, userID, sprintID, blockID, taskID)
 }
-func (f *fakeTaskService) Reorder(ctx context.Context, sprintID, blockID uuid.UUID, ids []uuid.UUID) error {
+func (f *fakeTaskService) Reorder(ctx context.Context, userID, sprintID, blockID uuid.UUID, ids []uuid.UUID) error {
 	if f.reorderFn == nil {
 		panic("unexpected Reorder")
 	}
-	return f.reorderFn(ctx, sprintID, blockID, ids)
+	return f.reorderFn(ctx, userID, sprintID, blockID, ids)
 }
 
 func taskRequest(method, body string, sprintID, blockID, taskID uuid.UUID) *http.Request {
 	r := httptest.NewRequest(method, "/", strings.NewReader(body))
+	r = r.WithContext(auth.WithUserID(r.Context(), defaultTestUserID))
 	r.SetPathValue("sprintID", sprintID.String())
 	r.SetPathValue("blockID", blockID.String())
 	if taskID != uuid.Nil {
@@ -71,8 +74,8 @@ func taskRequest(method, body string, sprintID, blockID, taskID uuid.UUID) *http
 
 func TestBlockTaskHandlerCreate(t *testing.T) {
 	sprintID, blockID, taskID := uuid.New(), uuid.New(), uuid.New()
-	service := &fakeTaskService{createFn: func(_ context.Context, gotSprint, gotBlock uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
-		if gotSprint != sprintID || gotBlock != blockID || input.Title != "task" || input.Position != 1 {
+	service := &fakeTaskService{createFn: func(_ context.Context, gotUser, gotSprint, gotBlock uuid.UUID, input CreateBlockTaskInput) (*BlockTask, error) {
+		if gotUser != defaultTestUserID || gotSprint != sprintID || gotBlock != blockID || input.Title != "task" || input.Position != 1 {
 			t.Fatal("wrong input")
 		}
 		return &BlockTask{ID: taskID, SprintBlockID: blockID, Title: input.Title, Position: 1, Status: TaskPending, Priority: PriorityMedium}, nil
@@ -109,6 +112,7 @@ func TestBlockTaskHandlerRejectsInvalidPathIDs(t *testing.T) {
 	}
 	for _, test := range tests {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(auth.WithUserID(r.Context(), defaultTestUserID))
 		r.SetPathValue("sprintID", test.sprintID)
 		r.SetPathValue("blockID", test.blockID)
 		r.SetPathValue("taskID", test.taskID)
@@ -133,11 +137,12 @@ func TestBlockTaskHandlerErrorMappings(t *testing.T) {
 		{"sprint conflict", sprintblocks.ErrSprintNotInPlanning, http.StatusConflict},
 		{"block conflict", ErrSprintBlockNotInPlanning, http.StatusConflict},
 		{"position conflict", ErrBlockTaskPositionConflict, http.StatusConflict},
+		{"status invalid", ErrBlockTaskStatusInvalid, http.StatusBadRequest},
 		{"unexpected", errors.New("sql details"), http.StatusInternalServerError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := &fakeTaskService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return test.err }}
+			service := &fakeTaskService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) error { return test.err }}
 			recorder := httptest.NewRecorder()
 			NewBlockTaskHandler(service).Delete(recorder, taskRequest(http.MethodDelete, "", uuid.New(), uuid.New(), uuid.New()))
 			if recorder.Code != test.want {
@@ -153,7 +158,7 @@ func TestBlockTaskHandlerErrorMappings(t *testing.T) {
 func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 	sprintID, blockID, taskID := uuid.New(), uuid.New(), uuid.New()
 	t.Run("empty list is json array", func(t *testing.T) {
-		service := &fakeTaskService{getAllFn: func(context.Context, uuid.UUID, uuid.UUID) ([]BlockTask, error) { return []BlockTask{}, nil }}
+		service := &fakeTaskService{getAllFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) ([]BlockTask, error) { return []BlockTask{}, nil }}
 		recorder := httptest.NewRecorder()
 		NewBlockTaskHandler(service).GetAll(recorder, taskRequest(http.MethodGet, "", sprintID, blockID, uuid.Nil))
 		if recorder.Code != 200 || strings.TrimSpace(recorder.Body.String()) != "[]" {
@@ -162,7 +167,7 @@ func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 	})
 	t.Run("patch returns json", func(t *testing.T) {
 		title := "updated"
-		service := &fakeTaskService{updateFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error) {
+		service := &fakeTaskService{updateFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, BlockTaskUpdateInput) (*BlockTask, error) {
 			return &BlockTask{ID: taskID, SprintBlockID: blockID, Title: title, Status: TaskPending, Priority: PriorityMedium}, nil
 		}}
 		recorder := httptest.NewRecorder()
@@ -171,8 +176,22 @@ func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
 		}
 	})
+	t.Run("patch updates status and returns completed_at", func(t *testing.T) {
+		completedAt := time.Now().UTC()
+		service := &fakeTaskService{updateFn: func(_ context.Context, _, _, _, _ uuid.UUID, input BlockTaskUpdateInput) (*BlockTask, error) {
+			if input.Status == nil || *input.Status != TaskDone {
+				t.Fatalf("expected status feita, got %#v", input.Status)
+			}
+			return &BlockTask{ID: taskID, SprintBlockID: blockID, Title: "task", Status: TaskDone, CompletedAt: &completedAt, Priority: PriorityMedium}, nil
+		}}
+		recorder := httptest.NewRecorder()
+		NewBlockTaskHandler(service).Update(recorder, taskRequest(http.MethodPatch, `{"status":"feita"}`, sprintID, blockID, taskID))
+		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `"status":"feita"`) || !strings.Contains(recorder.Body.String(), `"completed_at"`) {
+			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
 	t.Run("delete has no body", func(t *testing.T) {
-		service := &fakeTaskService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }}
+		service := &fakeTaskService{deleteFn: func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) error { return nil }}
 		recorder := httptest.NewRecorder()
 		NewBlockTaskHandler(service).Delete(recorder, taskRequest(http.MethodDelete, "", sprintID, blockID, taskID))
 		if recorder.Code != 204 || recorder.Body.Len() != 0 {
@@ -180,7 +199,7 @@ func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 		}
 	})
 	t.Run("reorder has no body", func(t *testing.T) {
-		service := &fakeTaskService{reorderFn: func(_ context.Context, _, _ uuid.UUID, ids []uuid.UUID) error {
+		service := &fakeTaskService{reorderFn: func(_ context.Context, _, _, _ uuid.UUID, ids []uuid.UUID) error {
 			if len(ids) != 1 || ids[0] != taskID {
 				t.Fatal("wrong ids")
 			}
@@ -190,6 +209,17 @@ func TestBlockTaskHandlerSuccessResponses(t *testing.T) {
 		NewBlockTaskHandler(service).Reorder(recorder, taskRequest(http.MethodPut, `{"task_ids":["`+taskID.String()+`"]}`, sprintID, blockID, uuid.Nil))
 		if recorder.Code != 204 || recorder.Body.Len() != 0 {
 			t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Body.String())
+		}
+	})
+	t.Run("returns 401 when unauthorized", func(t *testing.T) {
+		service := &fakeTaskService{}
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.SetPathValue("sprintID", sprintID.String())
+		req.SetPathValue("blockID", blockID.String())
+		NewBlockTaskHandler(service).GetAll(recorder, req)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", recorder.Code)
 		}
 	})
 }

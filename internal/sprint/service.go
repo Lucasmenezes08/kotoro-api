@@ -19,14 +19,16 @@ var (
 	ErrSprintDateInPast              error = errors.New("sprint date cannot be in the past")
 	ErrSprintDateRequired            error = errors.New("sprint date is required")
 	ErrSprintDeleteStatusNotCreating error = errors.New("Sprint can only be deleted while its status is 'creating'")
+	ErrSprintNotEditable             error = errors.New("sprint is not editable; actions can only be performed on planning or in-progress sprints from today or future")
+	ErrInvalidRestMinutes            error = errors.New("rest_minutes must be between 1 and 120")
 )
 
 type SprintServiceContract interface {
-	Create(ctx context.Context, sprint CreateSprintModel) error
-	GetAll(ctx context.Context) ([]Sprint, error)
-	GetById(ctx context.Context, id uuid.UUID) (*Sprint, error)
-	Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error
-	DeleteById(ctx context.Context, id uuid.UUID) error
+	Create(ctx context.Context, userID uuid.UUID, sprint CreateSprintModel) error
+	GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error)
+	GetById(ctx context.Context, userID uuid.UUID, id uuid.UUID) (*Sprint, error)
+	Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, payload UpdateSprintModel) error
+	DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error
 }
 
 type SprintService struct {
@@ -39,15 +41,15 @@ func NewSprintService(repo SprintRepositoryContract) *SprintService {
 	}
 }
 
-func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) error {
+func (s *SprintService) Create(ctx context.Context, userID uuid.UUID, payload CreateSprintModel) error {
 	if payload.SprintDate.IsZero() {
 		return ErrSprintDateRequired
 	}
 
 	location := payload.SprintDate.Location()
-	timeToday := beginningOfDay(time.Now(), location)
+	timeToday := BeginningOfDay(time.Now(), location)
 
-	sprintDate := beginningOfDay(payload.SprintDate, location)
+	sprintDate := BeginningOfDay(payload.SprintDate, location)
 
 	if sprintDate.Before(timeToday) {
 		return ErrSprintDateInPast
@@ -59,7 +61,7 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 		}
 	}
 
-	exist, err := s.repo.ExistsByDate(ctx, payload.SprintDate)
+	exist, err := s.repo.ExistsByDate(ctx, userID, payload.SprintDate)
 	if err != nil {
 		return err
 	}
@@ -68,21 +70,31 @@ func (s *SprintService) Create(ctx context.Context, payload CreateSprintModel) e
 		return ErrSprintAlreadyExists
 	}
 
-	input := CreateSprintModel{
-		Name:       payload.Name,
-		SprintDate: payload.SprintDate,
-		Status:     Creating,
+	restMinutes := payload.RestMinutes
+	if restMinutes <= 0 {
+		restMinutes = 10
+	}
+	if restMinutes > 120 {
+		return ErrInvalidRestMinutes
 	}
 
-	if sprint := s.repo.Create(ctx, input); sprint != nil {
-		return sprint
+	input := CreateSprintModel{
+		UserID:      userID,
+		Name:        payload.Name,
+		SprintDate:  payload.SprintDate,
+		RestMinutes: restMinutes,
+		Status:      Creating,
+	}
+
+	if err := s.repo.Create(ctx, input); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (s *SprintService) GetAll(ctx context.Context) ([]Sprint, error) {
-	sprints, err := s.repo.GetAll(ctx)
+func (s *SprintService) GetAll(ctx context.Context, userID uuid.UUID) ([]Sprint, error) {
+	sprints, err := s.repo.GetAll(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("Error to get all sprints: %w", err)
 	}
@@ -90,8 +102,8 @@ func (s *SprintService) GetAll(ctx context.Context) ([]Sprint, error) {
 	return sprints, nil
 }
 
-func (s *SprintService) GetById(ctx context.Context, id uuid.UUID) (*Sprint, error) {
-	sprint, err := s.repo.GetById(ctx, id)
+func (s *SprintService) GetById(ctx context.Context, userID uuid.UUID, id uuid.UUID) (*Sprint, error) {
+	sprint, err := s.repo.GetByIdAndUser(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +111,8 @@ func (s *SprintService) GetById(ctx context.Context, id uuid.UUID) (*Sprint, err
 	return sprint, nil
 }
 
-func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload UpdateSprintModel) error {
-	if payload.Name == nil && payload.Status == nil {
+func (s *SprintService) Update(ctx context.Context, userID uuid.UUID, id uuid.UUID, payload UpdateSprintModel) error {
+	if payload.Name == nil && payload.Status == nil && payload.RestMinutes == nil {
 		return ErrSprintUpdateEmpty
 	}
 
@@ -108,19 +120,41 @@ func (s *SprintService) Update(ctx context.Context, id uuid.UUID, payload Update
 		return ErrSprintNameEmpty
 	}
 
+	if payload.RestMinutes != nil {
+		if *payload.RestMinutes <= 0 || *payload.RestMinutes > 120 {
+			return ErrInvalidRestMinutes
+		}
+	}
+
 	if payload.Status != nil && !validSprintStatus(*payload.Status) {
 		return ErrSprintStatusInvalid
 	}
 
-	if err := s.repo.Update(ctx, id, payload); err != nil {
+	existing, err := s.repo.GetByIdAndUser(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return ErrSprintNotFound
+	}
+
+	if existing.Status != Creating && existing.Status != InProgress {
+		return ErrSprintNotEditable
+	}
+
+	if IsPastDate(existing.SprintDate) {
+		return ErrSprintNotEditable
+	}
+
+	if err := s.repo.Update(ctx, userID, id, payload); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
-	sprint, err := s.repo.GetById(ctx, id)
+func (s *SprintService) DeleteById(ctx context.Context, userID uuid.UUID, id uuid.UUID) error {
+	sprint, err := s.repo.GetByIdAndUser(ctx, userID, id)
 	if err != nil {
 		return err
 	}
@@ -129,7 +163,11 @@ func (s *SprintService) DeleteById(ctx context.Context, id uuid.UUID) error {
 		return ErrSprintDeleteStatusNotCreating
 	}
 
-	if err := s.repo.DeleteById(ctx, id); err != nil {
+	if IsPastDate(sprint.SprintDate) {
+		return ErrSprintDateInPast
+	}
+
+	if err := s.repo.DeleteById(ctx, userID, id); err != nil {
 		return err
 	}
 
@@ -145,10 +183,13 @@ func validSprintStatus(status SprintStatus) bool {
 	}
 }
 
-func beginningOfDay(
+func BeginningOfDay(
 	value time.Time,
 	location *time.Location,
 ) time.Time {
+	if location == nil {
+		location = value.Location()
+	}
 	localTime := value.In(location)
 
 	return time.Date(
@@ -161,4 +202,14 @@ func beginningOfDay(
 		0,
 		location,
 	)
+}
+
+func IsPastDate(date time.Time) bool {
+	if date.IsZero() {
+		return false
+	}
+	location := date.Location()
+	timeToday := BeginningOfDay(time.Now(), location)
+	sprintDay := BeginningOfDay(date, location)
+	return sprintDay.Before(timeToday)
 }

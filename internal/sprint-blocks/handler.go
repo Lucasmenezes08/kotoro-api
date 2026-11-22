@@ -5,7 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/Lucasmenezes08/kotoro-api.git/internal/auth"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/sprint"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/subject"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/utils"
@@ -15,21 +17,48 @@ import (
 type SprintBlockHandler struct{ service SprintBlockServiceContract }
 
 type createSprintBlockRequest struct {
-	SubjectID        string  `json:"subject_id"`
-	Title            *string `json:"title"`
-	Position         int     `json:"position"`
-	EstimatedSeconds *int    `json:"estimated_seconds"`
+	SubjectID        string   `json:"subject_id"`
+	Title            *string  `json:"title"`
+	Position         int      `json:"position"`
+	X                *float64 `json:"x"`
+	Y                *float64 `json:"y"`
+	EstimatedSeconds *int     `json:"estimated_seconds"`
 }
 
 type updateSprintBlockRequest struct {
-	SubjectID        *string `json:"subject_id"`
-	Title            *string `json:"title"`
-	Position         *int    `json:"position"`
-	EstimatedSeconds *int    `json:"estimated_seconds"`
+	SubjectID        *string  `json:"subject_id"`
+	Title            *string  `json:"title"`
+	Position         *int     `json:"position"`
+	X                *float64 `json:"x"`
+	Y                *float64 `json:"y"`
+	EstimatedSeconds *int     `json:"estimated_seconds"`
+	Status           *string  `json:"status"`
+	StartedAt        *string  `json:"started_at"`
+	CompletedAt      *string  `json:"completed_at"`
+}
+
+type canvasBlockLayoutRequest struct {
+	ID       string  `json:"id"`
+	Position int     `json:"position"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+}
+
+type updateCanvasLayoutRequest struct {
+	Blocks []canvasBlockLayoutRequest `json:"blocks"`
 }
 
 type reorderSprintBlocksRequest struct {
 	BlockIDs []string `json:"block_ids"`
+}
+
+type reuseBlocksRequest struct {
+	SourceSprintID string   `json:"source_sprint_id"`
+	BlockIDs       []string `json:"block_ids"`
+}
+
+type applyFixedCyclesRequest struct {
+	FixedCycleIDs []string `json:"fixed_cycle_ids"`
 }
 
 type sprintBlockErrorResponse struct {
@@ -41,6 +70,11 @@ func NewSprintBlockHandler(service SprintBlockServiceContract) *SprintBlockHandl
 }
 
 func (h *SprintBlockHandler) Create(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
 	if !ok {
 		return
@@ -54,8 +88,8 @@ func (h *SprintBlockHandler) Create(w http.ResponseWriter, r *http.Request) {
 		utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid subject id"})
 		return
 	}
-	block, err := h.service.Create(r.Context(), sprintID, CreateSprintBlockInput{
-		SubjectID: subjectID, Title: req.Title, Position: req.Position, EstimatedSeconds: req.EstimatedSeconds,
+	block, err := h.service.Create(r.Context(), userID, sprintID, CreateSprintBlockInput{
+		SubjectID: subjectID, Title: req.Title, Position: req.Position, X: req.X, Y: req.Y, EstimatedSeconds: req.EstimatedSeconds,
 	})
 	if err != nil {
 		h.writeError(w, err, "create sprint block")
@@ -65,11 +99,16 @@ func (h *SprintBlockHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintBlockHandler) GetAll(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
 	if !ok {
 		return
 	}
-	blocks, err := h.service.GetAll(r.Context(), sprintID)
+	blocks, err := h.service.GetAll(r.Context(), userID, sprintID)
 	if err != nil {
 		h.writeError(w, err, "get sprint blocks")
 		return
@@ -82,11 +121,16 @@ func (h *SprintBlockHandler) GetAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintBlockHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseBlockPath(w, r)
 	if !ok {
 		return
 	}
-	block, err := h.service.GetByID(r.Context(), sprintID, blockID)
+	block, err := h.service.GetByID(r.Context(), userID, sprintID, blockID)
 	if err != nil {
 		h.writeError(w, err, "get sprint block")
 		return
@@ -95,6 +139,11 @@ func (h *SprintBlockHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintBlockHandler) Update(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseBlockPath(w, r)
 	if !ok {
 		return
@@ -112,8 +161,32 @@ func (h *SprintBlockHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		subjectID = &parsed
 	}
-	block, err := h.service.Update(r.Context(), sprintID, blockID, SprintBlockUpdateModel{
-		SubjectID: subjectID, Title: req.Title, Position: req.Position, EstimatedSeconds: req.EstimatedSeconds,
+	var status *SprintBlocksStatus
+	if req.Status != nil {
+		s := SprintBlocksStatus(*req.Status)
+		status = &s
+	}
+	var startedAt *time.Time
+	if req.StartedAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.StartedAt)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid started_at format"})
+			return
+		}
+		startedAt = &parsed
+	}
+	var completedAt *time.Time
+	if req.CompletedAt != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.CompletedAt)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid completed_at format"})
+			return
+		}
+		completedAt = &parsed
+	}
+	block, err := h.service.Update(r.Context(), userID, sprintID, blockID, SprintBlockUpdateModel{
+		SubjectID: subjectID, Title: req.Title, Position: req.Position, X: req.X, Y: req.Y, EstimatedSeconds: req.EstimatedSeconds,
+		Status: status, StartedAt: startedAt, CompletedAt: completedAt,
 	})
 	if err != nil {
 		h.writeError(w, err, "update sprint block")
@@ -123,11 +196,16 @@ func (h *SprintBlockHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintBlockHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, blockID, ok := parseBlockPath(w, r)
 	if !ok {
 		return
 	}
-	if err := h.service.Delete(r.Context(), sprintID, blockID); err != nil {
+	if err := h.service.Delete(r.Context(), userID, sprintID, blockID); err != nil {
 		h.writeError(w, err, "delete sprint block")
 		return
 	}
@@ -135,6 +213,11 @@ func (h *SprintBlockHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SprintBlockHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
 	sprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
 	if !ok {
 		return
@@ -152,11 +235,109 @@ func (h *SprintBlockHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 		}
 		ids = append(ids, id)
 	}
-	if err := h.service.Reorder(r.Context(), sprintID, ids); err != nil {
+	if err := h.service.Reorder(r.Context(), userID, sprintID, ids); err != nil {
 		h.writeError(w, err, "reorder sprint blocks")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SprintBlockHandler) UpdateCanvasLayout(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	sprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req updateCanvasLayoutRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	items := make([]CanvasBlockLayoutItem, 0, len(req.Blocks))
+	for _, it := range req.Blocks {
+		id, err := uuid.Parse(it.ID)
+		if err != nil {
+			utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid block id"})
+			return
+		}
+		items = append(items, CanvasBlockLayoutItem{
+			ID:       id,
+			Position: it.Position,
+			X:        it.X,
+			Y:        it.Y,
+		})
+	}
+	if err := h.service.UpdateCanvasLayout(r.Context(), userID, sprintID, UpdateCanvasLayoutInput{Blocks: items}); err != nil {
+		h.writeError(w, err, "update canvas layout")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *SprintBlockHandler) ReuseBlocks(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	targetSprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req reuseBlocksRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	sourceSprintID, err := uuid.Parse(req.SourceSprintID)
+	if err != nil {
+		utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: "Invalid source sprint id"})
+		return
+	}
+	var blockUUIDs []uuid.UUID
+	for _, idStr := range req.BlockIDs {
+		u, err := uuid.Parse(idStr)
+		if err == nil {
+			blockUUIDs = append(blockUUIDs, u)
+		}
+	}
+	blocks, err := h.service.ReuseBlocks(r.Context(), userID, targetSprintID, sourceSprintID, blockUUIDs)
+	if err != nil {
+		h.writeError(w, err, "reuse sprint blocks")
+		return
+	}
+	utils.WriteJson(w, http.StatusCreated, blocks)
+}
+
+func (h *SprintBlockHandler) ApplyFixedCycles(w http.ResponseWriter, r *http.Request) {
+	userID, err := auth.GetUserIDFromContext(r.Context())
+	if err != nil {
+		utils.WriteJson(w, http.StatusUnauthorized, sprintBlockErrorResponse{Error: "Unauthorized"})
+		return
+	}
+	targetSprintID, ok := parsePathUUID(w, r, "sprintID", "Invalid sprint id")
+	if !ok {
+		return
+	}
+	var req applyFixedCyclesRequest
+	if r.Body != nil && r.ContentLength > 0 {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	var cycleUUIDs []uuid.UUID
+	for _, idStr := range req.FixedCycleIDs {
+		u, err := uuid.Parse(idStr)
+		if err == nil {
+			cycleUUIDs = append(cycleUUIDs, u)
+		}
+	}
+	blocks, err := h.service.ApplyFixedCycles(r.Context(), userID, targetSprintID, cycleUUIDs)
+	if err != nil {
+		h.writeError(w, err, "apply fixed cycles")
+		return
+	}
+	utils.WriteJson(w, http.StatusCreated, blocks)
 }
 
 func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operation string) {
@@ -166,13 +347,18 @@ func (h *SprintBlockHandler) writeError(w http.ResponseWriter, err error, operat
 		errors.Is(err, ErrSprintBlockEstimatedSecondsInvalid),
 		errors.Is(err, ErrSprintBlockTitleInvalid),
 		errors.Is(err, ErrSprintBlockTitleTooLong),
+		errors.Is(err, ErrSprintBlockStatusInvalid),
+		errors.Is(err, ErrSprintBlockTimeRangeInvalid),
 		errors.Is(err, ErrInvalidSprintBlockOrder):
 		utils.WriteJson(w, http.StatusBadRequest, sprintBlockErrorResponse{Error: err.Error()})
 	case errors.Is(err, sprint.ErrSprintNotFound),
 		errors.Is(err, subject.ErrSubjectNotFound),
 		errors.Is(err, ErrSprintBlockNotFound):
 		utils.WriteJson(w, http.StatusNotFound, sprintBlockErrorResponse{Error: err.Error()})
+	case errors.Is(err, ErrFixedCyclesAlreadyApplied):
+		utils.WriteJson(w, http.StatusConflict, sprintBlockErrorResponse{Error: "Ciclos fixos já foram aplicados a esta sprint"})
 	case errors.Is(err, ErrSprintNotInPlanning),
+		errors.Is(err, ErrSprintBlockNotEditable),
 		errors.Is(err, ErrSprintBlockPositionConflict),
 		errors.Is(err, ErrSprintBlockSubjectConflict):
 		utils.WriteJson(w, http.StatusConflict, sprintBlockErrorResponse{Error: err.Error()})
