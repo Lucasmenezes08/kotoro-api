@@ -31,6 +31,9 @@ packages = ["src/kotoro_analytics"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "integration: needs a real PostgreSQL (ANALYTICS_TEST_DATABASE_URL); skipped when unreachable",
+]
 
 [tool.ruff]
 line-length = 100

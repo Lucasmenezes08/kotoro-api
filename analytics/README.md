@@ -159,7 +159,22 @@ uv run uvicorn kotoro_analytics.api.main:app --reload --port 8001
 
 ```bash
 cd analytics
-uv run pytest
+uv run pytest                          # unit + API + integration
+uv run pytest -m "not integration"     # no database needed
+uv run pytest -m integration           # only PostgreSQL tests
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+| Folder               | What it checks                                          | Needs           |
+| -------------------- | ------------------------------------------------------- | --------------- |
+| `tests/unit`         | config, metric rules, streaks, seed data set            | nothing         |
+| `tests/api`          | HTTP status and JSON (database check faked)             | nothing         |
+| `tests/integration`  | migrations up/down and drift, real `/readyz`, seeds, read-only API session | PostgreSQL |
+
+Integration tests use `ANALYTICS_TEST_DATABASE_URL`, by default
+`postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics_test`
+(start it with `docker compose up -d postgres-analytics`). That database is **dropped
+and recreated** on every run, and its name must end in `_test`, so the development
+database `kotoro_analytics` is never touched. When PostgreSQL is unreachable the
+integration tests are skipped, not failed.
