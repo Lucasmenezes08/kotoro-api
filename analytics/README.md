@@ -182,6 +182,12 @@ Sprint, block, cycle and event IDs are derived with `uuid5` from a fixed namespa
 (`kotoro_analytics.seeds.SEED_NAMESPACE`), so they are the same on every run. There is
 one sprint per user and active day.
 
+## Operations and Kubernetes
+
+- [docs/operations.md](docs/operations.md): concurrency risks, protections, failure modes.
+- [deploy/kind/analytics](../deploy/kind/analytics/README.md): Kustomize manifests for Kind
+  (API, consumer, migrations Job, read database), validated with kubeconform.
+
 ## Logs and request ids
 
 Both processes log **one JSON object per line** to stdout
