@@ -115,3 +115,12 @@ def test_uvicorn_access_logger_is_disabled(stream: io.StringIO) -> None:
     logging.getLogger("uvicorn.access").info('"GET /summary?from=2026-11-01 HTTP/1.1" 200')
 
     assert "from=" not in stream.getvalue()
+
+
+def test_uvicorn_color_message_is_not_emitted(stream: io.StringIO) -> None:
+    logging.getLogger("uvicorn.error").info(
+        "Started server", extra={"color_message": "[36mStarted[0m"}
+    )
+
+    [line] = _lines(stream)
+    assert "color_message" not in line

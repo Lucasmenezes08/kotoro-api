@@ -39,7 +39,12 @@ _HANDLER_NAME = "kotoro-analytics"
 MIN_SECRET_LENGTH = 12
 
 # Fields every LogRecord has; anything else passed via `extra=` is emitted as well.
-_STANDARD_ATTRIBUTES = set(vars(logging.makeLogRecord({}))) | {"message", "asctime", "taskName"}
+_STANDARD_ATTRIBUTES = set(vars(logging.makeLogRecord({}))) | {
+    "message",
+    "asctime",
+    "taskName",
+    "color_message",  # uvicorn's ANSI-coloured duplicate of `message`
+}
 
 
 class Redactor:
