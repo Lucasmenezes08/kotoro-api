@@ -2,19 +2,16 @@
 
 import asyncio
 import contextlib
-import logging
 import signal
 
 from kotoro_analytics.config import Settings
 from kotoro_analytics.consumer.runner import run_consumer
+from kotoro_analytics.observability.logging import configure_logging
 
 
 async def _main() -> None:
     settings = Settings()
-    logging.basicConfig(
-        level=settings.log_level.upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging(settings)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

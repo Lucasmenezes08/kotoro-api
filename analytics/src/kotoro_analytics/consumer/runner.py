@@ -21,6 +21,7 @@ from kotoro_analytics.consumer.handler import (
     handle_message,
 )
 from kotoro_analytics.infrastructure.database.projections import StudyCycleFinishedProjector
+from kotoro_analytics.observability.logging import correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ async def declare_topology(
 
 def make_callback(projector: Projector, retry_delay_seconds: float):
     async def on_message(message: AbstractIncomingMessage) -> None:
+        # Each delivery runs in its own task: log lines carry this event's id.
+        correlation_id.set(message.message_id)
         outcome = await handle_message(
             body=message.body,
             routing_key=message.routing_key,

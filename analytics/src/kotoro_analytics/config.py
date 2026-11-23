@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     app_name: str = "kotoro-analytics"
     environment: Literal["local", "test", "production"] = "local"
     log_level: Literal["debug", "info", "warning", "error"] = "info"
+    # json for containers/log collectors; text is easier to read in a local terminal.
+    log_format: Literal["json", "text"] = "json"
 
     # repr=False keeps the password out of logs and error messages.
     database_url: str = Field(default=LOCAL_DATABASE_URL, repr=False)

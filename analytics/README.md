@@ -182,6 +182,29 @@ Sprint, block, cycle and event IDs are derived with `uuid5` from a fixed namespa
 (`kotoro_analytics.seeds.SEED_NAMESPACE`), so they are the same on every run. There is
 one sprint per user and active day.
 
+## Logs and request ids
+
+Both processes log **one JSON object per line** to stdout
+(`ANALYTICS_LOG_FORMAT=text` for a readable local terminal):
+
+```json
+{"timestamp": "2026-11-23T18:32:10.441500+00:00", "level": "INFO", "logger": "kotoro_analytics.access",
+ "message": "GET /api/v1/analytics/summary 401", "correlation_id": "demo-req-43",
+ "http_method": "GET", "http_path": "/api/v1/analytics/summary", "http_status": 401, "duration_ms": 7.68}
+```
+
+- **API:** every response carries `X-Request-ID`. A caller-provided id is reused when it
+  matches `[A-Za-z0-9._-]{1,128}`; otherwise one is generated. It is the `correlation_id`
+  of every log line of that request, including the `500` traceback.
+- **Consumer:** `correlation_id` is the event `id`, so one event can be followed from the
+  relay's log to the projection.
+- **Access log:** one line per request from the middleware (method, path, status,
+  duration). Query strings and headers are never logged; uvicorn's own access log is off.
+- **Redaction** runs on the final line (messages and tracebacks): the JWT secret and the
+  database/RabbitMQ passwords (when at least 12 characters), any `scheme://user:password@`
+  credentials and `Bearer <token>` values become `***`. HTTP error bodies never contain
+  exception details at all.
+
 ## Analytics Consumer
 
 `python -m kotoro_analytics.consumer` (Compose service `analytics-consumer`) reads

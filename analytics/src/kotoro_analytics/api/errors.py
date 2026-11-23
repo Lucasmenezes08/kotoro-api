@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from kotoro_analytics.application.errors import NotFoundError
 from kotoro_analytics.domain.period import InvalidPeriodError
 from kotoro_analytics.infrastructure.database.errors import is_database_unavailable
+from kotoro_analytics.observability.logging import correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +95,14 @@ async def _database_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 
 async def _unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    # Full traceback goes to the server log only.
+    # Full traceback goes to the server log only; the log formatter redacts secrets.
     logger.error("unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
-    return _error(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal server error")
+    response = _error(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal server error")
+    # This handler runs outside RequestIdMiddleware, so the header is added here.
+    request_id = correlation_id.get()
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 def register_error_handlers(app: FastAPI) -> None:
