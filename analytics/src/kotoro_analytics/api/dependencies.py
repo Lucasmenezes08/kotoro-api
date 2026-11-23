@@ -1,14 +1,16 @@
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, Request, Security
+from fastapi import Depends, Query, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kotoro_analytics.api.errors import UnauthorizedError
 from kotoro_analytics.config import Settings
+from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.health import database_is_reachable
 from kotoro_analytics.infrastructure.security.jwt import InvalidTokenError, decode_user_id
 
@@ -69,3 +71,22 @@ def get_current_user_id(
 
 
 CurrentUserIdDep = Annotated[uuid.UUID, Depends(get_current_user_id)]
+
+
+def get_period(
+    from_: Annotated[
+        date,
+        Query(
+            alias="from", description="First day, inclusive (YYYY-MM-DD).", examples=["2026-11-01"]
+        ),
+    ],
+    to: Annotated[
+        date,
+        Query(description="Last day, inclusive (YYYY-MM-DD).", examples=["2026-11-30"]),
+    ],
+) -> Period:
+    """Inclusive period in the metrics time zone. Invalid ranges become 422 (ADR 0002)."""
+    return Period(start=from_, end=to)
+
+
+PeriodDep = Annotated[Period, Depends(get_period)]

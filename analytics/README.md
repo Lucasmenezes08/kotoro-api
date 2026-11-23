@@ -67,6 +67,19 @@ HS256, signed with the shared secret, not expired, with `iss = kotoro-api` and
 query string or a custom header is never accepted. See
 [ADR 0002](docs/adr/0002-summary-contract-and-identity.md).
 
+### Errors
+
+Every error body follows the Go API shape (`{"error": "..."}`):
+
+| Status | When | Body |
+| ------ | ---- | ---- |
+| `401` | missing/invalid/expired token | `{"error": "unauthorized"}` |
+| `422` | bad or missing parameter, `from` after `to`, period over 366 days | `{"error": "invalid request", "details": [{"field": "from", "message": "..."}]}` |
+| `503` | analytics database down, unreachable or timed out | `{"error": "service unavailable"}` |
+| `500` | anything unexpected (traceback only in the server log) | `{"error": "internal server error"}` |
+
+Periods (`from`, `to`) are inclusive calendar days in `ANALYTICS_METRICS_TIMEZONE`.
+
 Compose passes the same `JWT_SECRET` (local default
 `kotoro-local-development-jwt-secret-0001`) to `api` and `analytics-api`.
 
