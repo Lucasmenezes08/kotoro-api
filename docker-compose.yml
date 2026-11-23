@@ -72,21 +72,57 @@ services:
     networks:
       - kotoro-net
 
-  analytics-api:
-    build:
+  # Applies the analytics read-model migrations once, then exits.
+  analytics-migrations:
+    build: &analytics-build
       context: ./analytics
       dockerfile: Dockerfile
-    ports:
-      - "8001:8001"
-    environment:
-      ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
-      ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
-      ANALYTICS_METRICS_TIMEZONE: ${ANALYTICS_METRICS_TIMEZONE:-America/Sao_Paulo}
-      ANALYTICS_JWT_SECRET: ${JWT_SECRET:-kotoro-local-development-jwt-secret-0001}
+    command: ["alembic", "upgrade", "head"]
+    environment: &analytics-db-env
       ANALYTICS_DATABASE_URL: postgresql+asyncpg://${ANALYTICS_POSTGRES_USER:-analytics}:${ANALYTICS_POSTGRES_PASSWORD:-analytics}@postgres-analytics:5432/${ANALYTICS_POSTGRES_DB:-kotoro_analytics}
     depends_on:
       postgres-analytics:
         condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - kotoro-net
+
+  analytics-api:
+    build: *analytics-build
+    ports:
+      - "8001:8001"
+    environment:
+      <<: *analytics-db-env
+      ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
+      ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
+      ANALYTICS_METRICS_TIMEZONE: ${ANALYTICS_METRICS_TIMEZONE:-America/Sao_Paulo}
+      ANALYTICS_JWT_SECRET: ${JWT_SECRET:-kotoro-local-development-jwt-secret-0001}
+    depends_on:
+      analytics-migrations:
+        condition: service_completed_successfully
+    networks:
+      - kotoro-net
+
+  # Reads kotoro.analytics.events and writes the projections (no HTTP port).
+  analytics-consumer:
+    build: *analytics-build
+    command: ["python", "-m", "kotoro_analytics.consumer"]
+    environment:
+      <<: *analytics-db-env
+      ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
+      ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
+      ANALYTICS_METRICS_TIMEZONE: ${ANALYTICS_METRICS_TIMEZONE:-America/Sao_Paulo}
+      ANALYTICS_RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+    depends_on:
+      analytics-migrations:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
     networks:
       - kotoro-net
 
