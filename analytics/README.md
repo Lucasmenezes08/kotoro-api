@@ -43,6 +43,13 @@ analytics/
 | `ANALYTICS_APP_NAME`    | `kotoro-analytics` | any string                        |
 | `ANALYTICS_ENVIRONMENT` | `local`            | `local`, `test`, `production`     |
 | `ANALYTICS_LOG_LEVEL`   | `info`             | `debug`, `info`, `warning`, `error` |
+| `ANALYTICS_DATABASE_URL` | `postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics` | async SQLAlchemy URL of the read database |
+| `ANALYTICS_METRICS_TIMEZONE` | `America/Sao_Paulo` | IANA zone used to bucket daily metrics (see [ADR 0001](docs/adr/0001-read-database-decisions.md)) |
+
+The read database runs as the `postgres-analytics` Compose service, exposed on host
+port `5433` so it does not clash with the main `postgres` on `5432`. Its credentials
+come from `ANALYTICS_POSTGRES_DB`, `ANALYTICS_POSTGRES_USER` and
+`ANALYTICS_POSTGRES_PASSWORD` (defaults: `kotoro_analytics` / `analytics` / `analytics`).
 
 ## Running with Docker Compose
 
