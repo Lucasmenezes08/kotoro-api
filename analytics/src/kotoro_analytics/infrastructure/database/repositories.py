@@ -11,6 +11,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kotoro_analytics.application.queries.daily import DayMetrics
 from kotoro_analytics.application.queries.summary import PeriodTotals
 from kotoro_analytics.domain.metrics import Streak
 from kotoro_analytics.domain.period import Period
@@ -55,3 +56,34 @@ class PostgresSummaryRepository:
             longest_days=row.longest_streak_days,
             last_active_date=row.last_active_date,
         )
+
+
+class PostgresDailyRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def active_days(self, user_id: uuid.UUID, period: Period) -> list[DayMetrics]:
+        # Range scan on pk_user_daily_metrics (user_id, metric_date), already ordered.
+        statement = (
+            select(
+                UserDailyMetric.metric_date,
+                UserDailyMetric.studied_seconds,
+                UserDailyMetric.completed_cycles,
+                UserDailyMetric.completed_tasks,
+            )
+            .where(
+                UserDailyMetric.user_id == user_id,
+                UserDailyMetric.metric_date.between(period.start, period.end),
+            )
+            .order_by(UserDailyMetric.metric_date)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [
+            DayMetrics(
+                day=row.metric_date,
+                studied_seconds=row.studied_seconds,
+                completed_cycles=row.completed_cycles,
+                completed_tasks=row.completed_tasks,
+            )
+            for row in rows
+        ]

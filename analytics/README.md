@@ -20,6 +20,7 @@ database of the Go API and never consumes RabbitMQ directly.
 | `GET /docs`    | Swagger UI (OpenAPI)                          |
 
 | `GET /api/v1/analytics/summary?from=&to=` | Dashboard summary of the authenticated user (requires a bearer token) |
+| `GET /api/v1/analytics/daily?from=&to=` | One entry per day of the period (inactive days as zeros), ascending, for charts ([ADR 0003](docs/adr/0003-chart-endpoints-contract.md)) |
 
 ```bash
 # Token for the seed user Ana, signed with the local development secret
