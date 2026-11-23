@@ -54,6 +54,22 @@ analytics/
 | `ANALYTICS_DATABASE_URL` | `postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics` | async SQLAlchemy URL of the read database |
 | `ANALYTICS_METRICS_TIMEZONE` | `America/Sao_Paulo` | IANA zone used to bucket daily metrics (see [ADR 0001](docs/adr/0001-read-database-decisions.md)) |
 
+| `ANALYTICS_JWT_SECRET` | dev secret in `local`/`test`; **required** (>= 32 chars) in `production` | must equal the Go API's `JWT_SECRET` |
+| `ANALYTICS_JWT_ISSUER` | `kotoro-api` | expected `iss` claim |
+
+### Authentication
+
+Dashboard endpoints identify the user **only** from the access token issued by the Go
+API (`POST /auth/login`), sent as `Authorization: Bearer <token>`. The token must be
+HS256, signed with the shared secret, not expired, with `iss = kotoro-api` and
+`sub` = `user_id` = a UUID. Anything else returns
+`401 {"error": "unauthorized"}` with `WWW-Authenticate: Bearer`. A user id in the URL,
+query string or a custom header is never accepted. See
+[ADR 0002](docs/adr/0002-summary-contract-and-identity.md).
+
+Compose passes the same `JWT_SECRET` (local default
+`kotoro-local-development-jwt-secret-0001`) to `api` and `analytics-api`.
+
 The read database runs as the `postgres-analytics` Compose service, exposed on host
 port `5433` so it does not clash with the main `postgres` on `5432`. Its credentials
 come from `ANALYTICS_POSTGRES_DB`, `ANALYTICS_POSTGRES_USER` and

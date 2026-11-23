@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from kotoro_analytics.api.errors import register_error_handlers
 from kotoro_analytics.api.routers import health
 from kotoro_analytics.config import Settings, get_settings
 from kotoro_analytics.infrastructure.database.session import (
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    register_error_handlers(app)
     app.include_router(health.router)
     return app
 

@@ -8,6 +8,8 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Shared with analytics-api (ANALYTICS_JWT_SECRET); see analytics ADR 0002.
+      JWT_SECRET: ${JWT_SECRET:-kotoro-local-development-jwt-secret-0001}
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +82,7 @@ services:
       ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
       ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
       ANALYTICS_METRICS_TIMEZONE: ${ANALYTICS_METRICS_TIMEZONE:-America/Sao_Paulo}
+      ANALYTICS_JWT_SECRET: ${JWT_SECRET:-kotoro-local-development-jwt-secret-0001}
       ANALYTICS_DATABASE_URL: postgresql+asyncpg://${ANALYTICS_POSTGRES_USER:-analytics}:${ANALYTICS_POSTGRES_PASSWORD:-analytics}@postgres-analytics:5432/${ANALYTICS_POSTGRES_DB:-kotoro_analytics}
     depends_on:
       postgres-analytics:
