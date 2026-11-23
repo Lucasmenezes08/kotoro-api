@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     db_pool_timeout_seconds: float = Field(default=5.0, gt=0)
     db_connect_timeout_seconds: float = Field(default=5.0, gt=0)
     db_statement_timeout_seconds: float = Field(default=10.0, gt=0)
+    db_readiness_timeout_seconds: float = Field(default=2.0, gt=0)
 
     @field_validator("metrics_timezone")
     @classmethod

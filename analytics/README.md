@@ -16,9 +16,17 @@ database of the Go API and never consumes RabbitMQ directly.
 | Endpoint       | Description                                   |
 | -------------- | --------------------------------------------- |
 | `GET /healthz` | Liveness check. Does not depend on a database |
+| `GET /readyz`  | Readiness check. `200` when the analytics database answers `SELECT 1` within `ANALYTICS_DB_READINESS_TIMEOUT_SECONDS` (default `2`), `503` otherwise |
 | `GET /docs`    | Swagger UI (OpenAPI)                          |
 
-The read database, `/readyz` and the dashboard endpoints come in the next stages.
+`/healthz` stays `200` while the database is down; only `/readyz` reports it.
+Failures are logged with the exception type only, never the message.
+
+When the `postgres-analytics` container is stopped, the log may also show
+`Future exception was never retrieved ... gaierror`. It comes from asyncpg after the
+readiness timeout cancels a pending DNS lookup and is harmless.
+
+The dashboard endpoints come in the next stages.
 
 ## Layout
 
