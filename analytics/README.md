@@ -51,6 +51,44 @@ port `5433` so it does not clash with the main `postgres` on `5432`. Its credent
 come from `ANALYTICS_POSTGRES_DB`, `ANALYTICS_POSTGRES_USER` and
 `ANALYTICS_POSTGRES_PASSWORD` (defaults: `kotoro_analytics` / `analytics` / `analytics`).
 
+## Read model and migrations
+
+Tables are projections of `study_cycle.finished.v1`, defined in
+`src/kotoro_analytics/infrastructure/database/models.py` and created by Alembic
+migrations in `migrations/versions/`.
+
+| Table                  | Grain                       | Purpose                                  |
+| ---------------------- | --------------------------- | ---------------------------------------- |
+| `processed_events`     | event `id`                  | idempotency (inbox) for the consumer     |
+| `study_cycle_facts`    | finished cycle              | raw facts for drill-down and rebuilds    |
+| `user_daily_metrics`   | user + day                  | summary and daily series                 |
+| `user_subject_metrics` | user + day + subject        | per-subject performance by period        |
+| `sprint_summaries`     | sprint                      | sprint summary                           |
+| `user_streaks`         | user                        | current and longest streak               |
+
+Days (`metric_date`) are calendar days in `ANALYTICS_METRICS_TIMEZONE`.
+
+Apply migrations (the API itself never runs them):
+
+```bash
+# inside Docker
+docker compose run --rm analytics-api alembic upgrade head
+
+# locally, against postgres-analytics on localhost:5433
+cd analytics
+uv run alembic upgrade head
+uv run alembic downgrade -1   # revert the last migration
+uv run alembic check          # fails if models and migrations drifted
+```
+
+New migration after changing the models:
+
+```bash
+uv run alembic revision --autogenerate --rev-id 0002 -m "describe change"
+```
+
+Review the generated file before committing it.
+
 ## Running with Docker Compose
 
 From the repository root:
