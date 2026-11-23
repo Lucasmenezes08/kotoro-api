@@ -1,14 +1,22 @@
+import uuid
+
 from fastapi import APIRouter
 
 from kotoro_analytics.api.dependencies import (
     CurrentUserIdDep,
     GetDailySeriesDep,
+    GetSprintSummaryDep,
     GetSubjectsReportDep,
     GetSummaryDep,
     PeriodDep,
 )
-from kotoro_analytics.api.errors import ERROR_RESPONSES
-from kotoro_analytics.api.schemas import DailyResponse, SubjectsResponse, SummaryResponse
+from kotoro_analytics.api.errors import ERROR_RESPONSES, NOT_FOUND_RESPONSE
+from kotoro_analytics.api.schemas import (
+    DailyResponse,
+    SprintSummaryResponse,
+    SubjectsResponse,
+    SummaryResponse,
+)
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["dashboard"], responses=ERROR_RESPONSES)
 
@@ -67,3 +75,23 @@ async def get_subjects(
     query: GetSubjectsReportDep,
 ) -> SubjectsResponse:
     return SubjectsResponse.from_report(await query.execute(user_id, period))
+
+
+@router.get(
+    "/sprints/{sprint_id}",
+    response_model=SprintSummaryResponse,
+    responses=NOT_FOUND_RESPONSE,
+    summary="Summary of one sprint",
+    description=(
+        "Totals of the sprint's finished cycles, first/last cycle times (UTC) and the split "
+        "per subject. Returns 404 when the caller has no analytics for this sprint: it does "
+        "not exist, has no finished cycle yet, or belongs to another user. These cases are "
+        "indistinguishable on purpose."
+    ),
+)
+async def get_sprint(
+    user_id: CurrentUserIdDep,
+    sprint_id: uuid.UUID,
+    query: GetSprintSummaryDep,
+) -> SprintSummaryResponse:
+    return SprintSummaryResponse.from_summary(await query.execute(user_id, sprint_id))

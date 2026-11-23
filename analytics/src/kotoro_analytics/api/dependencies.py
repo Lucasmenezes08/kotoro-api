@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kotoro_analytics.api.errors import UnauthorizedError
 from kotoro_analytics.application.queries.daily import DailyReadRepository, GetDailySeries
+from kotoro_analytics.application.queries.sprints import (
+    GetSprintSummary,
+    SprintReadRepository,
+)
 from kotoro_analytics.application.queries.subjects import (
     GetSubjectsReport,
     SubjectsReadRepository,
@@ -26,6 +30,7 @@ from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.health import database_is_reachable
 from kotoro_analytics.infrastructure.database.repositories import (
     PostgresDailyRepository,
+    PostgresSprintRepository,
     PostgresSubjectsRepository,
     PostgresSummaryRepository,
 )
@@ -155,3 +160,16 @@ def get_subjects_query(
 
 
 GetSubjectsReportDep = Annotated[GetSubjectsReport, Depends(get_subjects_query)]
+
+
+def get_sprint_repository(session: SessionDep) -> SprintReadRepository:
+    return PostgresSprintRepository(session)
+
+
+def get_sprint_query(
+    repository: Annotated[SprintReadRepository, Depends(get_sprint_repository)],
+) -> GetSprintSummary:
+    return GetSprintSummary(repository)
+
+
+GetSprintSummaryDep = Annotated[GetSprintSummary, Depends(get_sprint_query)]

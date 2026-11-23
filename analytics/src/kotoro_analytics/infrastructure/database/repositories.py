@@ -12,11 +12,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kotoro_analytics.application.queries.daily import DayMetrics
+from kotoro_analytics.application.queries.sprints import SprintTotals
 from kotoro_analytics.application.queries.subjects import SubjectMetrics
 from kotoro_analytics.application.queries.summary import PeriodTotals
 from kotoro_analytics.domain.metrics import Streak
 from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.models import (
+    SprintSummary,
+    StudyCycleFact,
     UserDailyMetric,
     UserStreak,
     UserSubjectDailyMetric,
@@ -114,6 +117,55 @@ class PostgresSubjectsRepository:
             )
             .group_by(UserSubjectDailyMetric.subject_id)
             .order_by(studied.desc(), UserSubjectDailyMetric.subject_id)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [
+            SubjectMetrics(
+                subject_id=row.subject_id,
+                studied_seconds=int(row.studied_seconds),
+                completed_cycles=int(row.completed_cycles),
+                completed_tasks=int(row.completed_tasks),
+            )
+            for row in rows
+        ]
+
+
+class PostgresSprintRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def sprint_totals(self, user_id: uuid.UUID, sprint_id: uuid.UUID) -> SprintTotals | None:
+        # PK lookup; the user_id condition makes another user's sprint invisible.
+        statement = select(SprintSummary).where(
+            SprintSummary.sprint_id == sprint_id, SprintSummary.user_id == user_id
+        )
+        row = (await self._session.execute(statement)).scalar_one_or_none()
+        if row is None:
+            return None
+        return SprintTotals(
+            sprint_id=row.sprint_id,
+            studied_seconds=row.studied_seconds,
+            completed_cycles=row.completed_cycles,
+            completed_tasks=row.completed_tasks,
+            first_cycle_started_at=row.first_cycle_started_at,
+            last_cycle_ended_at=row.last_cycle_ended_at,
+        )
+
+    async def sprint_subjects(
+        self, user_id: uuid.UUID, sprint_id: uuid.UUID
+    ) -> list[SubjectMetrics]:
+        # Uses ix_study_cycle_facts_sprint_id; bounded by the cycles of one sprint.
+        studied = func.sum(StudyCycleFact.elapsed_seconds)
+        statement = (
+            select(
+                StudyCycleFact.subject_id,
+                studied.label("studied_seconds"),
+                func.count().label("completed_cycles"),
+                func.sum(StudyCycleFact.completed_task_count).label("completed_tasks"),
+            )
+            .where(StudyCycleFact.sprint_id == sprint_id, StudyCycleFact.user_id == user_id)
+            .group_by(StudyCycleFact.subject_id)
+            .order_by(studied.desc(), StudyCycleFact.subject_id)
         )
         rows = (await self._session.execute(statement)).all()
         return [

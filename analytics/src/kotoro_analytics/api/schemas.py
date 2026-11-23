@@ -1,11 +1,12 @@
 """HTTP response contracts. ORM models are never returned directly (onboarding §15)."""
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from kotoro_analytics.application.queries.daily import DailySeries
+from kotoro_analytics.application.queries.sprints import SprintSummary
 from kotoro_analytics.application.queries.subjects import SubjectMetrics, SubjectsReport
 from kotoro_analytics.application.queries.summary import Summary
 from kotoro_analytics.domain.period import Period
@@ -194,4 +195,58 @@ class SubjectsResponse(BaseModel):
         return cls(
             period=PeriodResponse.of(report.period, report.timezone),
             subjects=[SubjectResponse.of(subject) for subject in report.subjects],
+        )
+
+
+def _utc(moment: datetime | None) -> datetime | None:
+    return moment.astimezone(UTC) if moment is not None else None
+
+
+class SprintSummaryResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "sprint_id": "34603048-a584-5fe3-b49c-7f792b0fe040",
+                "studied_seconds": 7500,
+                "completed_cycles": 3,
+                "completed_tasks": 3,
+                "first_cycle_started_at": "2026-11-20T12:00:00Z",
+                "last_cycle_ended_at": "2026-11-21T01:50:00Z",
+                "subjects": [
+                    {
+                        "subject_id": "aaaaaaaa-0000-4000-8000-000000000001",
+                        "studied_seconds": 4500,
+                        "completed_cycles": 2,
+                        "completed_tasks": 3,
+                    },
+                    {
+                        "subject_id": "aaaaaaaa-0000-4000-8000-000000000002",
+                        "studied_seconds": 3000,
+                        "completed_cycles": 1,
+                        "completed_tasks": 0,
+                    },
+                ],
+            }
+        }
+    )
+
+    sprint_id: uuid.UUID
+    studied_seconds: int
+    completed_cycles: int
+    completed_tasks: int
+    first_cycle_started_at: datetime | None = Field(description="UTC.")
+    last_cycle_ended_at: datetime | None = Field(description="UTC.")
+    subjects: list[SubjectResponse] = Field(description="Same item shape and order as /subjects.")
+
+    @classmethod
+    def from_summary(cls, summary: SprintSummary) -> "SprintSummaryResponse":
+        totals = summary.totals
+        return cls(
+            sprint_id=totals.sprint_id,
+            studied_seconds=totals.studied_seconds,
+            completed_cycles=totals.completed_cycles,
+            completed_tasks=totals.completed_tasks,
+            first_cycle_started_at=_utc(totals.first_cycle_started_at),
+            last_cycle_ended_at=_utc(totals.last_cycle_ended_at),
+            subjects=[SubjectResponse.of(subject) for subject in summary.subjects],
         )

@@ -22,6 +22,7 @@ database of the Go API and never consumes RabbitMQ directly.
 | `GET /api/v1/analytics/summary?from=&to=` | Dashboard summary of the authenticated user (requires a bearer token) |
 | `GET /api/v1/analytics/daily?from=&to=` | One entry per day of the period (inactive days as zeros), ascending, for charts ([ADR 0003](docs/adr/0003-chart-endpoints-contract.md)) |
 | `GET /api/v1/analytics/subjects?from=&to=` | Totals per subject with activity in the period, most studied first; ids only, names come from the Go API |
+| `GET /api/v1/analytics/sprints/{sprint_id}` | Totals, first/last cycle (UTC) and per-subject split of one sprint; `404` when unknown, without finished cycles, or another user's |
 
 ```bash
 # Token for the seed user Ana, signed with the local development secret
