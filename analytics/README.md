@@ -19,6 +19,21 @@ database of the Go API and never consumes RabbitMQ directly.
 | `GET /readyz`  | Readiness check. `200` when the analytics database answers `SELECT 1` within `ANALYTICS_DB_READINESS_TIMEOUT_SECONDS` (default `2`), `503` otherwise |
 | `GET /docs`    | Swagger UI (OpenAPI)                          |
 
+| `GET /api/v1/analytics/summary?from=&to=` | Dashboard summary of the authenticated user (requires a bearer token) |
+
+```bash
+# Token for the seed user Ana, signed with the local development secret
+TOKEN=$(cd analytics && uv run python -c "from tests.support.tokens import make_token; print(make_token('11111111-1111-4111-8111-111111111111'))")
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8001/api/v1/analytics/summary?from=2026-11-01&to=2026-11-30"
+# {"period":{"from":"2026-11-01","to":"2026-11-30","timezone":"America/Sao_Paulo"},
+#  "studied_seconds":75000,"completed_cycles":33,"completed_tasks":18,"active_days":16,
+#  "streak":{"current_days":0,"longest_days":9,"last_active_date":"2026-11-20"}}
+```
+
+`streak.current_days` is relative to today: with the default seed (last active day
+2026-11-20) it is `0` after 2026-11-21. Seed with `--end-date <today>` to see a live streak.
+In the real flow, use the token returned by the Go API's `POST /auth/login`.
+
 `/healthz` stays `200` while the database is down; only `/readyz` reports it.
 Failures are logged with the exception type only, never the message.
 

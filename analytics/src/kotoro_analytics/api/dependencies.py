@@ -3,15 +3,23 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Query, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kotoro_analytics.api.errors import UnauthorizedError
+from kotoro_analytics.application.queries.summary import (
+    Clock,
+    GetSummary,
+    SummaryReadRepository,
+    utc_now,
+)
 from kotoro_analytics.config import Settings
 from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.health import database_is_reachable
+from kotoro_analytics.infrastructure.database.repositories import PostgresSummaryRepository
 from kotoro_analytics.infrastructure.security.jwt import InvalidTokenError, decode_user_id
 
 logger = logging.getLogger(__name__)
@@ -90,3 +98,23 @@ def get_period(
 
 
 PeriodDep = Annotated[Period, Depends(get_period)]
+
+
+def get_clock() -> Clock:
+    """Current time source. Tests override it to pin "today"."""
+    return utc_now
+
+
+def get_summary_repository(session: SessionDep) -> SummaryReadRepository:
+    return PostgresSummaryRepository(session)
+
+
+def get_summary_query(
+    repository: Annotated[SummaryReadRepository, Depends(get_summary_repository)],
+    settings: SettingsDep,
+    clock: Annotated[Clock, Depends(get_clock)],
+) -> GetSummary:
+    return GetSummary(repository, timezone=ZoneInfo(settings.metrics_timezone), clock=clock)
+
+
+GetSummaryDep = Annotated[GetSummary, Depends(get_summary_query)]
