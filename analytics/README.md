@@ -97,6 +97,44 @@ uv run alembic revision --autogenerate --rev-id 0002 -m "describe change"
 
 Review the generated file before committing it.
 
+## Development seed data
+
+Deterministic data for local development and manual tests. Apply migrations first.
+
+```bash
+# inside Docker
+docker compose run --rm analytics-api python -m kotoro_analytics.seeds
+
+# locally
+cd analytics
+uv run python -m kotoro_analytics.seeds                       # last active day 2026-11-20
+uv run python -m kotoro_analytics.seeds --end-date 2026-12-01 # shift the whole data set
+```
+
+Re-running replaces only the seed users' rows. The script refuses to run when
+`ANALYTICS_ENVIRONMENT=production`. Aggregates are derived from the cycle facts, so all
+tables agree with each other.
+
+> These IDs exist only for local development. They are not real users and are not
+> authentication: the identity mechanism is still being defined (see onboarding §8).
+
+| User  | `user_id`                              | What it covers |
+| ----- | -------------------------------------- | -------------- |
+| Ana   | `11111111-1111-4111-8111-111111111111` | 16 active days from end-16 to end, gap at end-7 (longest streak 9, current 7); 33 cycles, 75 000 s, 18 tasks; 3 subjects; a 22:00 cycle that is next day in UTC but counts for the local day |
+| Bruno | `22222222-2222-4222-8222-222222222222` | 3 days on the same dates as Ana (isolation between users); 3 cycles, 8 100 s, 6 tasks |
+| Carla | `33333333-3333-4333-8333-333333333333` | no activity (empty dashboard, zeroed totals) |
+
+| Subject (name for reference only) | `subject_id`                           |
+| --------------------------------- | -------------------------------------- |
+| Ana: Matemática                   | `aaaaaaaa-0000-4000-8000-000000000001` |
+| Ana: Português                    | `aaaaaaaa-0000-4000-8000-000000000002` |
+| Ana: Biologia                     | `aaaaaaaa-0000-4000-8000-000000000003` |
+| Bruno: Física                     | `bbbbbbbb-0000-4000-8000-000000000001` |
+
+Sprint, block, cycle and event IDs are derived with `uuid5` from a fixed namespace
+(`kotoro_analytics.seeds.SEED_NAMESPACE`), so they are the same on every run. There is
+one sprint per user and active day.
+
 ## Running with Docker Compose
 
 From the repository root:
