@@ -1,0 +1,121 @@
+# CI of the Kotoro Analytics service (FastAPI API + RabbitMQ consumer) in analytics/.
+# The Go API keeps its own workflow (go.yml).
+name: Analytics
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "analytics/**"
+      - ".github/workflows/analytics.yml"
+  pull_request:
+    # Any base branch: analytics PRs are stacked on each other, not only on main.
+    paths:
+      - "analytics/**"
+      - ".github/workflows/analytics.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analytics-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: analytics
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
+          enable-cache: true
+          cache-dependency-glob: analytics/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+  test:
+    name: Tests (unit, API, PostgreSQL, RabbitMQ)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kotoro_analytics
+          POSTGRES_USER: analytics
+          POSTGRES_PASSWORD: analytics
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U analytics -d kotoro_analytics"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 20
+    env:
+      ANALYTICS_TEST_DATABASE_URL: postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics_test
+      ANALYTICS_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+      # Unreachable services must fail the build, not skip the integration tests.
+      ANALYTICS_REQUIRE_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
+          enable-cache: true
+          cache-dependency-glob: analytics/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Pytest
+        run: uv run pytest -ra
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build --tag kotoro-analytics:ci .
+
+      - name: Smoke test (health without a database)
+        run: |
+          docker run --detach --name analytics --publish 8001:8001 kotoro-analytics:ci
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8001/healthz; then echo; break; fi
+            sleep 1
+          done
+          curl --fail --silent --show-error http://localhost:8001/healthz
+          # No database in this job: readiness must report 503, not crash.
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8001/readyz)" = "503"
+
+      - name: Container logs
+        if: always()
+        run: docker logs analytics || true

@@ -19,6 +19,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from tests.support.integration import unavailable
+
 ANALYTICS_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEST_DATABASE_URL = (
     "postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics_test"
@@ -75,7 +77,7 @@ def migrated_database(database_url: str) -> Iterator[str]:
     try:
         asyncio.run(_recreate_database(database_url))
     except (OSError, TimeoutError) as exc:
-        pytest.skip(f"PostgreSQL not reachable for integration tests ({type(exc).__name__})")
+        unavailable("PostgreSQL", exc)
 
     command.upgrade(alembic_config(database_url), "head")
     yield database_url

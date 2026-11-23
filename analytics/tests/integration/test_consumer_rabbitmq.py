@@ -22,6 +22,7 @@ from kotoro_analytics.consumer.handler import HANDLED_ROUTING_KEY
 from kotoro_analytics.consumer.runner import run_consumer
 from kotoro_analytics.infrastructure.database.models import ProcessedEvent, UserDailyMetric
 from tests.support.events import event_dict, event_json
+from tests.support.integration import unavailable
 
 pytestmark = pytest.mark.anyio
 
@@ -37,7 +38,7 @@ async def broker(migrated_database: str) -> AsyncIterator[tuple[Settings, Publis
     try:
         connection = await asyncio.wait_for(aio_pika.connect(RABBITMQ_URL), timeout=3)
     except (OSError, TimeoutError, aio_pika.exceptions.AMQPConnectionError) as exc:
-        pytest.skip(f"RabbitMQ not reachable for integration tests ({type(exc).__name__})")
+        unavailable("RabbitMQ", exc)
 
     suffix = uuid.uuid4().hex[:8]
     settings = Settings(

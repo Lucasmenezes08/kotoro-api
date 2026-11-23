@@ -295,6 +295,12 @@ uv run ruff format --check .
 | `tests/api`          | HTTP status and JSON (database check faked)             | nothing         |
 | `tests/integration`  | migrations up/down and drift, real `/readyz`, seeds, read-only API session | PostgreSQL |
 
+CI (`.github/workflows/analytics.yml`) runs on every pull request and on `main` when
+`analytics/` changes: Ruff, the full test suite against PostgreSQL 16 and RabbitMQ 3.13
+service containers, and a Docker build with a smoke test (`/healthz` 200, `/readyz` 503
+without a database). CI sets `ANALYTICS_REQUIRE_INTEGRATION=1`, which turns an
+unreachable PostgreSQL/RabbitMQ into a failure instead of skipped tests.
+
 Integration tests use `ANALYTICS_TEST_DATABASE_URL`, by default
 `postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics_test`
 (start it with `docker compose up -d postgres-analytics`). That database is **dropped
