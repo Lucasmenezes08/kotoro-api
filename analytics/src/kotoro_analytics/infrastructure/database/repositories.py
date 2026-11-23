@@ -12,10 +12,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kotoro_analytics.application.queries.daily import DayMetrics
+from kotoro_analytics.application.queries.subjects import SubjectMetrics
 from kotoro_analytics.application.queries.summary import PeriodTotals
 from kotoro_analytics.domain.metrics import Streak
 from kotoro_analytics.domain.period import Period
-from kotoro_analytics.infrastructure.database.models import UserDailyMetric, UserStreak
+from kotoro_analytics.infrastructure.database.models import (
+    UserDailyMetric,
+    UserStreak,
+    UserSubjectDailyMetric,
+)
 
 
 class PostgresSummaryRepository:
@@ -84,6 +89,39 @@ class PostgresDailyRepository:
                 studied_seconds=row.studied_seconds,
                 completed_cycles=row.completed_cycles,
                 completed_tasks=row.completed_tasks,
+            )
+            for row in rows
+        ]
+
+
+class PostgresSubjectsRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def subjects_in_period(self, user_id: uuid.UUID, period: Period) -> list[SubjectMetrics]:
+        # Range scan on pk_user_subject_metrics (user_id, metric_date, subject_id).
+        studied = func.sum(UserSubjectDailyMetric.studied_seconds)
+        statement = (
+            select(
+                UserSubjectDailyMetric.subject_id,
+                studied.label("studied_seconds"),
+                func.sum(UserSubjectDailyMetric.completed_cycles).label("completed_cycles"),
+                func.sum(UserSubjectDailyMetric.completed_tasks).label("completed_tasks"),
+            )
+            .where(
+                UserSubjectDailyMetric.user_id == user_id,
+                UserSubjectDailyMetric.metric_date.between(period.start, period.end),
+            )
+            .group_by(UserSubjectDailyMetric.subject_id)
+            .order_by(studied.desc(), UserSubjectDailyMetric.subject_id)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [
+            SubjectMetrics(
+                subject_id=row.subject_id,
+                studied_seconds=int(row.studied_seconds),
+                completed_cycles=int(row.completed_cycles),
+                completed_tasks=int(row.completed_tasks),
             )
             for row in rows
         ]

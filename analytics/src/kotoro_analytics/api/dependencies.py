@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kotoro_analytics.api.errors import UnauthorizedError
 from kotoro_analytics.application.queries.daily import DailyReadRepository, GetDailySeries
+from kotoro_analytics.application.queries.subjects import (
+    GetSubjectsReport,
+    SubjectsReadRepository,
+)
 from kotoro_analytics.application.queries.summary import (
     Clock,
     GetSummary,
@@ -22,6 +26,7 @@ from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.health import database_is_reachable
 from kotoro_analytics.infrastructure.database.repositories import (
     PostgresDailyRepository,
+    PostgresSubjectsRepository,
     PostgresSummaryRepository,
 )
 from kotoro_analytics.infrastructure.security.jwt import InvalidTokenError, decode_user_id
@@ -136,3 +141,17 @@ def get_daily_query(
 
 
 GetDailySeriesDep = Annotated[GetDailySeries, Depends(get_daily_query)]
+
+
+def get_subjects_repository(session: SessionDep) -> SubjectsReadRepository:
+    return PostgresSubjectsRepository(session)
+
+
+def get_subjects_query(
+    repository: Annotated[SubjectsReadRepository, Depends(get_subjects_repository)],
+    settings: SettingsDep,
+) -> GetSubjectsReport:
+    return GetSubjectsReport(repository, timezone=ZoneInfo(settings.metrics_timezone))
+
+
+GetSubjectsReportDep = Annotated[GetSubjectsReport, Depends(get_subjects_query)]

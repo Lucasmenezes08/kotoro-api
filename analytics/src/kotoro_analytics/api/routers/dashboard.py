@@ -3,11 +3,12 @@ from fastapi import APIRouter
 from kotoro_analytics.api.dependencies import (
     CurrentUserIdDep,
     GetDailySeriesDep,
+    GetSubjectsReportDep,
     GetSummaryDep,
     PeriodDep,
 )
 from kotoro_analytics.api.errors import ERROR_RESPONSES
-from kotoro_analytics.api.schemas import DailyResponse, SummaryResponse
+from kotoro_analytics.api.schemas import DailyResponse, SubjectsResponse, SummaryResponse
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["dashboard"], responses=ERROR_RESPONSES)
 
@@ -48,3 +49,21 @@ async def get_daily(
     query: GetDailySeriesDep,
 ) -> DailyResponse:
     return DailyResponse.from_series(await query.execute(user_id, period))
+
+
+@router.get(
+    "/subjects",
+    response_model=SubjectsResponse,
+    summary="Performance per subject",
+    description=(
+        "Totals per subject between `from` and `to` (inclusive, metrics time zone). Only "
+        "subjects with activity in the period are listed, most studied first. Names are not "
+        "included: join `subject_id` with the subjects from the Kotoro API."
+    ),
+)
+async def get_subjects(
+    user_id: CurrentUserIdDep,
+    period: PeriodDep,
+    query: GetSubjectsReportDep,
+) -> SubjectsResponse:
+    return SubjectsResponse.from_report(await query.execute(user_id, period))

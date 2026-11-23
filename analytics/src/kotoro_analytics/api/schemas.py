@@ -1,10 +1,12 @@
 """HTTP response contracts. ORM models are never returned directly (onboarding §15)."""
 
+import uuid
 from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from kotoro_analytics.application.queries.daily import DailySeries
+from kotoro_analytics.application.queries.subjects import SubjectMetrics, SubjectsReport
 from kotoro_analytics.application.queries.summary import Summary
 from kotoro_analytics.domain.period import Period
 
@@ -129,4 +131,67 @@ class DailyResponse(BaseModel):
                 )
                 for day in series.days
             ],
+        )
+
+
+class SubjectResponse(BaseModel):
+    subject_id: uuid.UUID = Field(description="Resolve the name with the Go API's subjects.")
+    studied_seconds: int
+    completed_cycles: int
+    completed_tasks: int
+
+    @classmethod
+    def of(cls, subject: SubjectMetrics) -> "SubjectResponse":
+        return cls(
+            subject_id=subject.subject_id,
+            studied_seconds=subject.studied_seconds,
+            completed_cycles=subject.completed_cycles,
+            completed_tasks=subject.completed_tasks,
+        )
+
+
+class SubjectsResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "period": {
+                    "from": "2026-11-01",
+                    "to": "2026-11-30",
+                    "timezone": "America/Sao_Paulo",
+                },
+                "subjects": [
+                    {
+                        "subject_id": "aaaaaaaa-0000-4000-8000-000000000001",
+                        "studied_seconds": 27000,
+                        "completed_cycles": 12,
+                        "completed_tasks": 8,
+                    },
+                    {
+                        "subject_id": "aaaaaaaa-0000-4000-8000-000000000002",
+                        "studied_seconds": 25500,
+                        "completed_cycles": 11,
+                        "completed_tasks": 5,
+                    },
+                    {
+                        "subject_id": "aaaaaaaa-0000-4000-8000-000000000003",
+                        "studied_seconds": 22500,
+                        "completed_cycles": 10,
+                        "completed_tasks": 5,
+                    },
+                ],
+            }
+        }
+    )
+
+    period: PeriodResponse
+    subjects: list[SubjectResponse] = Field(
+        description="Subjects with activity in the period, most studied first "
+        "(ties by subject_id). Empty when there is no activity."
+    )
+
+    @classmethod
+    def from_report(cls, report: SubjectsReport) -> "SubjectsResponse":
+        return cls(
+            period=PeriodResponse.of(report.period, report.timezone),
+            subjects=[SubjectResponse.of(subject) for subject in report.subjects],
         )

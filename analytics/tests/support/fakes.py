@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from kotoro_analytics.application.queries.daily import DayMetrics
+from kotoro_analytics.application.queries.subjects import SubjectMetrics
 from kotoro_analytics.application.queries.summary import PeriodTotals
 from kotoro_analytics.domain.metrics import Streak
 from kotoro_analytics.domain.period import Period
@@ -38,6 +39,21 @@ class FakeDailyRepository:
     calls: list[tuple[uuid.UUID, Period]] = field(default_factory=list)
 
     async def active_days(self, user_id: uuid.UUID, period: Period) -> list[DayMetrics]:
+        self.calls.append((user_id, period))
+        if self.error is not None:
+            raise self.error
+        return list(self.stored)
+
+
+@dataclass
+class FakeSubjectsRepository:
+    """In-memory SubjectsReadRepository returning the given subjects as stored."""
+
+    stored: list[SubjectMetrics] = field(default_factory=list)
+    error: Exception | None = None
+    calls: list[tuple[uuid.UUID, Period]] = field(default_factory=list)
+
+    async def subjects_in_period(self, user_id: uuid.UUID, period: Period) -> list[SubjectMetrics]:
         self.calls.append((user_id, period))
         if self.error is not None:
             raise self.error
