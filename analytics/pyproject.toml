@@ -8,6 +8,10 @@ dependencies = [
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.32,<1.0",
     "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
+    "asyncpg>=0.30,<1.0",
+    "tzdata>=2024.2",
+    "alembic>=1.14,<2.0",
 ]
 
 [dependency-groups]
@@ -27,6 +31,9 @@ packages = ["src/kotoro_analytics"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "integration: needs a real PostgreSQL (ANALYTICS_TEST_DATABASE_URL); skipped when unreachable",
+]
 
 [tool.ruff]
 line-length = 100

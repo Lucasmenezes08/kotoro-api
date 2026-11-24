@@ -79,12 +79,36 @@ services:
     environment:
       ANALYTICS_ENVIRONMENT: ${ANALYTICS_ENVIRONMENT:-local}
       ANALYTICS_LOG_LEVEL: ${ANALYTICS_LOG_LEVEL:-info}
+      ANALYTICS_METRICS_TIMEZONE: ${ANALYTICS_METRICS_TIMEZONE:-America/Sao_Paulo}
+      ANALYTICS_DATABASE_URL: postgresql+asyncpg://${ANALYTICS_POSTGRES_USER:-analytics}:${ANALYTICS_POSTGRES_PASSWORD:-analytics}@postgres-analytics:5432/${ANALYTICS_POSTGRES_DB:-kotoro_analytics}
+    depends_on:
+      postgres-analytics:
+        condition: service_healthy
+    networks:
+      - kotoro-net
+
+  postgres-analytics:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${ANALYTICS_POSTGRES_DB:-kotoro_analytics}
+      POSTGRES_USER: ${ANALYTICS_POSTGRES_USER:-analytics}
+      POSTGRES_PASSWORD: ${ANALYTICS_POSTGRES_PASSWORD:-analytics}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_analytics_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - kotoro-net
 
 volumes:
   postgres_data:
   rabbitmq_data:
+  postgres_analytics_data:
 
 networks:
   kotoro-net:
