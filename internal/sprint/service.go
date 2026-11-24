@@ -46,12 +46,7 @@ func (s *SprintService) Create(ctx context.Context, userID uuid.UUID, payload Cr
 		return ErrSprintDateRequired
 	}
 
-	location := payload.SprintDate.Location()
-	timeToday := BeginningOfDay(time.Now(), location)
-
-	sprintDate := BeginningOfDay(payload.SprintDate, location)
-
-	if sprintDate.Before(timeToday) {
+	if IsPastDate(payload.SprintDate) {
 		return ErrSprintDateInPast
 	}
 
@@ -205,11 +200,22 @@ func BeginningOfDay(
 }
 
 func IsPastDate(date time.Time) bool {
+	return IsPastDateAt(date, time.Now(), time.Local)
+}
+
+// IsPastDateAt checks whether the civil calendar date stored in date precedes
+// the calendar day of now in location. PostgreSQL DATE values arrive in time.UTC
+// even when the app runs in a local timezone, so date's stored Y/M/D must not
+// be shifted via .In(location).
+func IsPastDateAt(date time.Time, now time.Time, location *time.Location) bool {
 	if date.IsZero() {
 		return false
 	}
-	location := date.Location()
-	timeToday := BeginningOfDay(time.Now(), location)
-	sprintDay := BeginningOfDay(date, location)
+	if location == nil {
+		location = time.Local
+	}
+	timeToday := BeginningOfDay(now, location)
+	year, month, day := date.Date()
+	sprintDay := time.Date(year, month, day, 0, 0, 0, 0, location)
 	return sprintDay.Before(timeToday)
 }
