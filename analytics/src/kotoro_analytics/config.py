@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # Must equal the Go API's JWT_SECRET (ADR 0002). SecretStr keeps it out of repr/logs.
     jwt_secret: SecretStr | None = None
     jwt_issuer: str = "kotoro-api"
+    cors_allowed_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    )
 
     # Analytics Consumer (python -m kotoro_analytics.consumer). Topology matches the Go
     # relay's SetupTopology (internal/messaging/rabbitmq/publisher.go).
