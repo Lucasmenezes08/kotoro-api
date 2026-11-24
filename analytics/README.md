@@ -182,6 +182,59 @@ Sprint, block, cycle and event IDs are derived with `uuid5` from a fixed namespa
 (`kotoro_analytics.seeds.SEED_NAMESPACE`), so they are the same on every run. There is
 one sprint per user and active day.
 
+## Analytics Consumer
+
+`python -m kotoro_analytics.consumer` (Compose service `analytics-consumer`) reads
+`study_cycle.finished.v1` from the `kotoro.analytics.events` queue and updates every
+projection. It never serves HTTP; the API never reads RabbitMQ.
+
+```text
+Go API -> outbox_events -> Outbox Relay -> RabbitMQ -> analytics-consumer -> postgres-analytics -> analytics-api
+```
+
+| Guarantee | How |
+| --------- | --- |
+| No double counting (redelivery) | `processed_events` insert (`ON CONFLICT DO NOTHING`) in the same transaction as the projections |
+| No loss | message acked only after the transaction commits; a crash before that means redelivery |
+| Out-of-order events | additive upserts, `LEAST`/`GREATEST` for sprint times, streak recomputed from stored days |
+| Parallel consumers | per-user `pg_advisory_xact_lock` inside the transaction |
+| Broker restart | `aio_pika.connect_robust` reconnects and re-declares the topology |
+| Database down | message held for `ANALYTICS_CONSUMER_RETRY_DELAY_SECONDS`, then requeued |
+| Malformed message | rejected without requeue and logged; the queue keeps flowing |
+
+| Variable | Default |
+| -------- | ------- |
+| `ANALYTICS_RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` (Compose: `rabbitmq:5672`) |
+| `ANALYTICS_RABBITMQ_EXCHANGE` | `kotoro.domain-events` |
+| `ANALYTICS_RABBITMQ_QUEUE` | `kotoro.analytics.events` |
+| `ANALYTICS_RABBITMQ_PREFETCH` | `10` |
+| `ANALYTICS_CONSUMER_RETRY_DELAY_SECONDS` | `5` |
+
+The consumer declares the same exchange, queue and binding as the relay
+(`internal/messaging/rabbitmq/publisher.go`), so either can start first. Migrations run in
+the one-shot `analytics-migrations` service before the API and the consumer start.
+
+Known limitations:
+
+- **No dead-letter queue**: rejected messages are only in the logs (same as the relay,
+  which keeps failures in `outbox_events`).
+- **Eventual consistency**: a finished cycle shows up after the relay polls (up to its
+  `OUTBOX_MAX_POLL_INTERVAL`, 5 s when idle) plus consumer time; ~4 s in the demo below.
+- The Go relay does not reconnect to RabbitMQ by itself; after a broker restart run
+  `docker compose restart outbox-relay` (the consumer reconnects on its own).
+
+### End-to-end demo
+
+```bash
+docker compose up --build -d
+python analytics/scripts/demo_end_to_end.py
+```
+
+It registers a user in the Go API, finishes a real study cycle, waits until the event
+reaches the Analytics API and prints `summary`, `daily`, `subjects` and the sprint.
+To show fault tolerance, `docker compose stop analytics-consumer` before running it: the
+event waits in the queue and is projected as soon as the consumer is started again.
+
 ## Running with Docker Compose
 
 From the repository root:

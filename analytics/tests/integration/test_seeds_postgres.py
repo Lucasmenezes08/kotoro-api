@@ -20,6 +20,7 @@ from kotoro_analytics.infrastructure.database.session import (
 )
 from kotoro_analytics.seeds import (
     DEFAULT_END_DATE,
+    SEED_USERS,
     USER_ANA,
     USER_BRUNO,
     apply_seed,
@@ -74,8 +75,17 @@ async def test_seed_is_idempotent_and_keeps_other_users(writer_engine: AsyncEngi
     await apply_seed(writer_engine, dataset)
 
     async with writer_engine.connect() as connection:
-        facts = await connection.scalar(select(func.count()).select_from(StudyCycleFact))
-        events = await connection.scalar(select(func.count()).select_from(ProcessedEvent))
+        # Scoped to the seed: other tests share this database.
+        facts = await connection.scalar(
+            select(func.count())
+            .select_from(StudyCycleFact)
+            .where(StudyCycleFact.user_id.in_(SEED_USERS))
+        )
+        events = await connection.scalar(
+            select(func.count())
+            .select_from(ProcessedEvent)
+            .where(ProcessedEvent.event_id.in_([e["event_id"] for e in dataset.processed_events]))
+        )
 
     assert facts == len(dataset.facts)
     assert events == len(dataset.processed_events)

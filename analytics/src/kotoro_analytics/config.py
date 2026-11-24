@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     jwt_secret: SecretStr | None = None
     jwt_issuer: str = "kotoro-api"
 
+    # Analytics Consumer (python -m kotoro_analytics.consumer). Topology matches the Go
+    # relay's SetupTopology (internal/messaging/rabbitmq/publisher.go).
+    rabbitmq_url: str = Field(default="amqp://guest:guest@localhost:5672/", repr=False)
+    rabbitmq_exchange: str = "kotoro.domain-events"
+    rabbitmq_queue: str = "kotoro.analytics.events"
+    rabbitmq_prefetch: int = Field(default=10, ge=1)
+    consumer_retry_delay_seconds: float = Field(default=5.0, gt=0)
+
     @model_validator(mode="after")
     def _require_jwt_secret_outside_development(self) -> Self:
         if self.jwt_secret is None or not self.jwt_secret.get_secret_value():
