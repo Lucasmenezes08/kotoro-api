@@ -19,6 +19,21 @@ database of the Go API and never consumes RabbitMQ directly.
 | `GET /readyz`  | Readiness check. `200` when the analytics database answers `SELECT 1` within `ANALYTICS_DB_READINESS_TIMEOUT_SECONDS` (default `2`), `503` otherwise |
 | `GET /docs`    | Swagger UI (OpenAPI)                          |
 
+| `GET /api/v1/analytics/summary?from=&to=` | Dashboard summary of the authenticated user (requires a bearer token) |
+
+```bash
+# Token for the seed user Ana, signed with the local development secret
+TOKEN=$(cd analytics && uv run python -c "from tests.support.tokens import make_token; print(make_token('11111111-1111-4111-8111-111111111111'))")
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8001/api/v1/analytics/summary?from=2026-11-01&to=2026-11-30"
+# {"period":{"from":"2026-11-01","to":"2026-11-30","timezone":"America/Sao_Paulo"},
+#  "studied_seconds":75000,"completed_cycles":33,"completed_tasks":18,"active_days":16,
+#  "streak":{"current_days":0,"longest_days":9,"last_active_date":"2026-11-20"}}
+```
+
+`streak.current_days` is relative to today: with the default seed (last active day
+2026-11-20) it is `0` after 2026-11-21. Seed with `--end-date <today>` to see a live streak.
+In the real flow, use the token returned by the Go API's `POST /auth/login`.
+
 `/healthz` stays `200` while the database is down; only `/readyz` reports it.
 Failures are logged with the exception type only, never the message.
 
@@ -53,6 +68,35 @@ analytics/
 | `ANALYTICS_LOG_LEVEL`   | `info`             | `debug`, `info`, `warning`, `error` |
 | `ANALYTICS_DATABASE_URL` | `postgresql+asyncpg://analytics:analytics@localhost:5433/kotoro_analytics` | async SQLAlchemy URL of the read database |
 | `ANALYTICS_METRICS_TIMEZONE` | `America/Sao_Paulo` | IANA zone used to bucket daily metrics (see [ADR 0001](docs/adr/0001-read-database-decisions.md)) |
+
+| `ANALYTICS_JWT_SECRET` | dev secret in `local`/`test`; **required** (>= 32 chars) in `production` | must equal the Go API's `JWT_SECRET` |
+| `ANALYTICS_JWT_ISSUER` | `kotoro-api` | expected `iss` claim |
+
+### Authentication
+
+Dashboard endpoints identify the user **only** from the access token issued by the Go
+API (`POST /auth/login`), sent as `Authorization: Bearer <token>`. The token must be
+HS256, signed with the shared secret, not expired, with `iss = kotoro-api` and
+`sub` = `user_id` = a UUID. Anything else returns
+`401 {"error": "unauthorized"}` with `WWW-Authenticate: Bearer`. A user id in the URL,
+query string or a custom header is never accepted. See
+[ADR 0002](docs/adr/0002-summary-contract-and-identity.md).
+
+### Errors
+
+Every error body follows the Go API shape (`{"error": "..."}`):
+
+| Status | When | Body |
+| ------ | ---- | ---- |
+| `401` | missing/invalid/expired token | `{"error": "unauthorized"}` |
+| `422` | bad or missing parameter, `from` after `to`, period over 366 days | `{"error": "invalid request", "details": [{"field": "from", "message": "..."}]}` |
+| `503` | analytics database down, unreachable or timed out | `{"error": "service unavailable"}` |
+| `500` | anything unexpected (traceback only in the server log) | `{"error": "internal server error"}` |
+
+Periods (`from`, `to`) are inclusive calendar days in `ANALYTICS_METRICS_TIMEZONE`.
+
+Compose passes the same `JWT_SECRET` (local default
+`kotoro-local-development-jwt-secret-0001`) to `api` and `analytics-api`.
 
 The read database runs as the `postgres-analytics` Compose service, exposed on host
 port `5433` so it does not clash with the main `postgres` on `5432`. Its credentials
