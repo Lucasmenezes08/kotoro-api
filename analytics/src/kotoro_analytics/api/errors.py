@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 
+from kotoro_analytics.application.errors import NotFoundError
 from kotoro_analytics.domain.period import InvalidPeriodError
 from kotoro_analytics.infrastructure.database.errors import is_database_unavailable
 
@@ -59,6 +60,10 @@ async def _unauthorized_handler(_request: Request, _exc: Exception) -> JSONRespo
     return response
 
 
+async def _not_found_handler(_request: Request, _exc: Exception) -> JSONResponse:
+    return _error(status.HTTP_404_NOT_FOUND, "not found")
+
+
 async def _request_validation_handler(_request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
     details = []
@@ -98,6 +103,7 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(UnauthorizedError, _unauthorized_handler)
     app.add_exception_handler(RequestValidationError, _request_validation_handler)
     app.add_exception_handler(InvalidPeriodError, _invalid_period_handler)
+    app.add_exception_handler(NotFoundError, _not_found_handler)
     for database_error in (SQLAlchemyError, asyncpg.exceptions.PostgresError, OSError):
         app.add_exception_handler(database_error, _database_error_handler)
     # Last resort. Starlette re-raises after responding so the server can log it too.
@@ -137,4 +143,12 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
         "description": "The analytics database is unavailable; retry later.",
         "content": {"application/json": {"example": {"error": "service unavailable"}}},
     },
+}
+
+NOT_FOUND_RESPONSE: dict[int | str, dict[str, Any]] = {
+    status.HTTP_404_NOT_FOUND: {
+        "model": ErrorResponse,
+        "description": "Nothing to show for this caller: unknown, no data yet, or not theirs.",
+        "content": {"application/json": {"example": {"error": "not found"}}},
+    }
 }

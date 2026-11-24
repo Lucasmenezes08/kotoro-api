@@ -59,6 +59,11 @@ def _seed_id(*parts: object) -> uuid.UUID:
     return uuid.uuid5(SEED_NAMESPACE, ":".join(str(part) for part in parts))
 
 
+def seed_sprint_id(user_id: uuid.UUID, day: date) -> uuid.UUID:
+    """Id of the seed sprint of `user_id` on `day` (one sprint per user and active day)."""
+    return _seed_id("sprint", user_id, day)
+
+
 @dataclass(frozen=True)
 class _CycleSpec:
     user_id: uuid.UUID
@@ -134,7 +139,7 @@ def build_seed_dataset(end_date: date, timezone: ZoneInfo) -> SeedDataset:
         ended_at = started_at + timedelta(seconds=spec.elapsed_seconds)
         metric_date = metric_date_for(ended_at, timezone)
 
-        sprint_id = _seed_id("sprint", spec.user_id, spec.day)
+        sprint_id = seed_sprint_id(spec.user_id, spec.day)
         cycle_id = _seed_id("cycle", spec.user_id, spec.day, spec.sequence_number)
         event_id = _seed_id("event", cycle_id)
 

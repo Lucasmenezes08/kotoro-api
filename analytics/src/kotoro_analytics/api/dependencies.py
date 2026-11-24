@@ -10,6 +10,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kotoro_analytics.api.errors import UnauthorizedError
+from kotoro_analytics.application.queries.daily import DailyReadRepository, GetDailySeries
+from kotoro_analytics.application.queries.sprints import (
+    GetSprintSummary,
+    SprintReadRepository,
+)
+from kotoro_analytics.application.queries.subjects import (
+    GetSubjectsReport,
+    SubjectsReadRepository,
+)
 from kotoro_analytics.application.queries.summary import (
     Clock,
     GetSummary,
@@ -19,7 +28,12 @@ from kotoro_analytics.application.queries.summary import (
 from kotoro_analytics.config import Settings
 from kotoro_analytics.domain.period import Period
 from kotoro_analytics.infrastructure.database.health import database_is_reachable
-from kotoro_analytics.infrastructure.database.repositories import PostgresSummaryRepository
+from kotoro_analytics.infrastructure.database.repositories import (
+    PostgresDailyRepository,
+    PostgresSprintRepository,
+    PostgresSubjectsRepository,
+    PostgresSummaryRepository,
+)
 from kotoro_analytics.infrastructure.security.jwt import InvalidTokenError, decode_user_id
 
 logger = logging.getLogger(__name__)
@@ -118,3 +132,44 @@ def get_summary_query(
 
 
 GetSummaryDep = Annotated[GetSummary, Depends(get_summary_query)]
+
+
+def get_daily_repository(session: SessionDep) -> DailyReadRepository:
+    return PostgresDailyRepository(session)
+
+
+def get_daily_query(
+    repository: Annotated[DailyReadRepository, Depends(get_daily_repository)],
+    settings: SettingsDep,
+) -> GetDailySeries:
+    return GetDailySeries(repository, timezone=ZoneInfo(settings.metrics_timezone))
+
+
+GetDailySeriesDep = Annotated[GetDailySeries, Depends(get_daily_query)]
+
+
+def get_subjects_repository(session: SessionDep) -> SubjectsReadRepository:
+    return PostgresSubjectsRepository(session)
+
+
+def get_subjects_query(
+    repository: Annotated[SubjectsReadRepository, Depends(get_subjects_repository)],
+    settings: SettingsDep,
+) -> GetSubjectsReport:
+    return GetSubjectsReport(repository, timezone=ZoneInfo(settings.metrics_timezone))
+
+
+GetSubjectsReportDep = Annotated[GetSubjectsReport, Depends(get_subjects_query)]
+
+
+def get_sprint_repository(session: SessionDep) -> SprintReadRepository:
+    return PostgresSprintRepository(session)
+
+
+def get_sprint_query(
+    repository: Annotated[SprintReadRepository, Depends(get_sprint_repository)],
+) -> GetSprintSummary:
+    return GetSprintSummary(repository)
+
+
+GetSprintSummaryDep = Annotated[GetSprintSummary, Depends(get_sprint_query)]

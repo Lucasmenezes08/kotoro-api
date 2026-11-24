@@ -1,6 +1,9 @@
 import uuid
 from dataclasses import dataclass, field
 
+from kotoro_analytics.application.queries.daily import DayMetrics
+from kotoro_analytics.application.queries.sprints import SprintTotals
+from kotoro_analytics.application.queries.subjects import SubjectMetrics
 from kotoro_analytics.application.queries.summary import PeriodTotals
 from kotoro_analytics.domain.metrics import Streak
 from kotoro_analytics.domain.period import Period
@@ -26,3 +29,58 @@ class FakeSummaryRepository:
         if self.error is not None:
             raise self.error
         return self.stored_streak
+
+
+@dataclass
+class FakeDailyRepository:
+    """In-memory DailyReadRepository returning the given active days."""
+
+    stored: list[DayMetrics] = field(default_factory=list)
+    error: Exception | None = None
+    calls: list[tuple[uuid.UUID, Period]] = field(default_factory=list)
+
+    async def active_days(self, user_id: uuid.UUID, period: Period) -> list[DayMetrics]:
+        self.calls.append((user_id, period))
+        if self.error is not None:
+            raise self.error
+        return list(self.stored)
+
+
+@dataclass
+class FakeSubjectsRepository:
+    """In-memory SubjectsReadRepository returning the given subjects as stored."""
+
+    stored: list[SubjectMetrics] = field(default_factory=list)
+    error: Exception | None = None
+    calls: list[tuple[uuid.UUID, Period]] = field(default_factory=list)
+
+    async def subjects_in_period(self, user_id: uuid.UUID, period: Period) -> list[SubjectMetrics]:
+        self.calls.append((user_id, period))
+        if self.error is not None:
+            raise self.error
+        return list(self.stored)
+
+
+@dataclass
+class FakeSprintRepository:
+    """In-memory SprintReadRepository keyed by (user_id, sprint_id), like the real one."""
+
+    sprints: dict[tuple[uuid.UUID, uuid.UUID], tuple[SprintTotals, list[SubjectMetrics]]] = field(
+        default_factory=dict
+    )
+    error: Exception | None = None
+    calls: list[tuple[str, uuid.UUID, uuid.UUID]] = field(default_factory=list)
+
+    async def sprint_totals(self, user_id: uuid.UUID, sprint_id: uuid.UUID) -> SprintTotals | None:
+        self.calls.append(("sprint_totals", user_id, sprint_id))
+        if self.error is not None:
+            raise self.error
+        stored = self.sprints.get((user_id, sprint_id))
+        return stored[0] if stored else None
+
+    async def sprint_subjects(
+        self, user_id: uuid.UUID, sprint_id: uuid.UUID
+    ) -> list[SubjectMetrics]:
+        self.calls.append(("sprint_subjects", user_id, sprint_id))
+        stored = self.sprints.get((user_id, sprint_id))
+        return list(stored[1]) if stored else []
