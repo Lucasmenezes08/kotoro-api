@@ -141,7 +141,7 @@ func stringPointer(value string) *string {
 }
 
 func sprintTestDate() time.Time {
-	tomorrow := time.Now().UTC().AddDate(0, 0, 1)
+	tomorrow := time.Now().AddDate(0, 0, 1)
 
 	return time.Date(
 		tomorrow.Year(),
@@ -314,7 +314,7 @@ func TestSprintServiceCreate(t *testing.T) {
 	})
 
 	t.Run("returns error when sprint date is in the past", func(t *testing.T) {
-		yesterday := time.Now().UTC().AddDate(0, 0, -1)
+		yesterday := time.Now().AddDate(0, 0, -1)
 
 		service := NewSprintService(&fakeSprintRepository{})
 
@@ -1142,6 +1142,34 @@ func TestSprintServiceDeleteById(t *testing.T) {
 		}
 		if captured.RestMinutes == nil || *captured.RestMinutes != 15 {
 			t.Fatalf("expected RestMinutes=15, got %v", captured.RestMinutes)
+		}
+	})
+}
+
+func TestIsPastDateAt(t *testing.T) {
+	brt := time.FixedZone("America/Sao_Paulo", -3*3600)
+	// Simulate 21:30 BRT on 2026-11-23, which is 00:30 UTC on 2026-11-24.
+	nowLateEveningBRT := time.Date(2026, time.November, 24, 0, 30, 0, 0, time.UTC)
+
+	t.Run("today sprint scanned in UTC remains valid after 21:00 BRT", func(t *testing.T) {
+		sprintDateFromPostgres := time.Date(2026, time.November, 23, 0, 0, 0, 0, time.UTC)
+		if IsPastDateAt(sprintDateFromPostgres, nowLateEveningBRT, brt) {
+			t.Fatalf("expected 2026-11-23 sprint to still be active at 21:30 BRT")
+		}
+	})
+
+	t.Run("yesterday sprint is rejected at 21:30 BRT", func(t *testing.T) {
+		yesterdayFromPostgres := time.Date(2026, time.November, 22, 0, 0, 0, 0, time.UTC)
+		if !IsPastDateAt(yesterdayFromPostgres, nowLateEveningBRT, brt) {
+			t.Fatalf("expected 2026-11-22 sprint to be in the past at 21:30 BRT on 2026-11-23")
+		}
+	})
+
+	t.Run("today sprint expires after local midnight", func(t *testing.T) {
+		afterLocalMidnight := time.Date(2026, time.November, 24, 0, 5, 0, 0, brt)
+		sprintDateFromPostgres := time.Date(2026, time.November, 23, 0, 0, 0, 0, time.UTC)
+		if !IsPastDateAt(sprintDateFromPostgres, afterLocalMidnight, brt) {
+			t.Fatalf("expected 2026-11-23 sprint to be in the past after local midnight")
 		}
 	})
 }

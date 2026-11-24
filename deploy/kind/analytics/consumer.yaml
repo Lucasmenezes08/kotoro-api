@@ -1,0 +1,58 @@
+# Analytics Consumer: RabbitMQ -> projections. No HTTP port.
+# Safe to scale out: per-user advisory locks and processed_events keep projections
+# correct with several replicas (docs/operations.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-consumer
+  labels:
+    app.kubernetes.io/name: analytics-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: analytics-consumer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: analytics-consumer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        # Never consume before the tables exist: a missing table would make the consumer
+        # reject (and lose) the first events.
+        - name: wait-for-schema
+          image: kotoro-analytics
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - kotoro_analytics.infrastructure.database.wait_for_schema
+            - --timeout=600
+          envFrom:
+            - configMapRef: { name: analytics-config }
+            - secretRef: { name: analytics-secrets }
+          securityContext: &restricted
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+      containers:
+        - name: consumer
+          image: kotoro-analytics
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "kotoro_analytics.consumer"]
+          envFrom:
+            - configMapRef: { name: analytics-config }
+            - secretRef: { name: analytics-secrets }
+          securityContext: *restricted
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      # SIGTERM stops new deliveries; unacknowledged messages go back to the queue.
+      terminationGracePeriodSeconds: 30

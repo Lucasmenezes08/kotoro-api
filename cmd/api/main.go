@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/app"
 	"github.com/Lucasmenezes08/kotoro-api.git/internal/database"

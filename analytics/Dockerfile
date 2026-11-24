@@ -33,4 +33,5 @@ EXPOSE 8001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz', timeout=2)"
 
-CMD ["uvicorn", "kotoro_analytics.api.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# Access lines come from RequestIdMiddleware (with request id, without query strings).
+CMD ["uvicorn", "kotoro_analytics.api.main:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]

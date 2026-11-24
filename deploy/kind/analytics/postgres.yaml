@@ -1,0 +1,75 @@
+# Analytics read database. Separate from the Go API's transactional database.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-analytics
+  labels:
+    app.kubernetes.io/name: postgres-analytics
+spec:
+  selector:
+    app.kubernetes.io/name: postgres-analytics
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-analytics
+  labels:
+    app.kubernetes.io/name: postgres-analytics
+spec:
+  serviceName: postgres-analytics
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-analytics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-analytics
+    spec:
+      securityContext:
+        fsGroup: 70 # postgres user in postgres:alpine
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: kotoro_analytics
+            - name: POSTGRES_USER
+              value: analytics
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: analytics-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "analytics", "-d", "kotoro_analytics"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "analytics", "-d", "kotoro_analytics"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

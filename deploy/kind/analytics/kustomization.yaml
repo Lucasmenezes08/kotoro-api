@@ -1,0 +1,40 @@
+# Kotoro Analytics on a local Kind cluster. See README.md in this folder.
+#   cp secrets.env.example secrets.env   # then edit the values
+#   kubectl apply -k deploy/kind/analytics
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kotoro-analytics
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: kotoro-analytics
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - rabbitmq-dev.yaml
+  - migrations-job.yaml
+  - api.yaml
+  - consumer.yaml
+
+configMapGenerator:
+  - name: analytics-config
+    literals:
+      - ANALYTICS_ENVIRONMENT=production
+      - ANALYTICS_LOG_LEVEL=info
+      - ANALYTICS_LOG_FORMAT=json
+      - ANALYTICS_METRICS_TIMEZONE=America/Sao_Paulo
+      - ANALYTICS_RABBITMQ_EXCHANGE=kotoro.domain-events
+      - ANALYTICS_RABBITMQ_QUEUE=kotoro.analytics.events
+
+# secrets.env is git-ignored; secrets.env.example documents every key.
+secretGenerator:
+  - name: analytics-secrets
+    envs:
+      - secrets.env
+
+images:
+  - name: kotoro-analytics
+    newTag: "0.1.0"
